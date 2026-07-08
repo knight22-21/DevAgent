@@ -44,6 +44,11 @@ class BraveConfig(BaseModel):
     api_key: str = ""
 
 
+class SearchXConfig(BaseModel):
+    """SearchX API configuration."""
+    api_key: str = ""
+
+
 class OutputConfig(BaseModel):
     """Output formatting preferences."""
     verbosity: Literal["quiet", "normal", "verbose"] = "normal"
@@ -54,6 +59,8 @@ class SpecSyncConfig(BaseModel):
     llm: LLMConfig = LLMConfig()
     github: GitHubConfig = GitHubConfig()
     brave: BraveConfig = BraveConfig()
+    searchx: SearchXConfig = SearchXConfig()
+    search_provider: Literal["brave", "searchx"] = "searchx"
     output: OutputConfig = OutputConfig()
 
 

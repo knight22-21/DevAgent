@@ -20,6 +20,7 @@ from specsync.core.config import (
     LLMConfig,
     LLMFallbackConfig,
     OutputConfig,
+    SearchXConfig,
     SpecSyncConfig,
     config_exists,
     load_config,
@@ -125,6 +126,24 @@ def _validate_brave_key(api_key: str) -> tuple[bool, str]:
         return False, f"Brave returned status {resp.status_code}"
     except Exception as exc:
         return False, f"Brave check failed: {exc}"
+
+
+def _validate_searchx_key(api_key: str) -> tuple[bool, str]:
+    """Validate a SearchX API key."""
+    if not api_key:
+        return False, "Not configured (optional)"
+    try:
+        resp = httpx.get(
+            "https://searchx.dev/api/v1/search",
+            params={"q": "test", "count": 1},
+            headers={"X-API-Key": api_key, "Accept": "application/json"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return True, "API key valid"
+        return False, f"SearchX returned status {resp.status_code}"
+    except Exception as exc:
+        return False, f"SearchX check failed: {exc}"
 
 
 def _check_command(cmd: list[str]) -> tuple[bool, str]:
@@ -236,24 +255,68 @@ def init() -> None:
         default=existing_gh_token if existing_gh_token else "",
     )
 
-    # --- Step 5: Brave Search API key ---
+    # --- Step 5: Search provider selection ---
     console.print()
-    console.print("[bold]Step 3:[/bold] Brave Search API Key [dim](optional)[/dim]")
-    console.print(
-        "  [dim]Get one at: https://brave.com/search/api/[/dim]"
+    console.print("[bold]Step 3:[/bold] Choose your search provider")
+    console.print("  [dim]SearchX is free (3K/day), Brave is paid[/dim]")
+    
+    search_providers = ["searchx", "brave"]
+    for i, p in enumerate(search_providers, 1):
+        default_tag = " [dim](default, free)[/dim]" if p == "searchx" else ""
+        console.print(f"  {i}. {p}{default_tag}")
+    console.print()
+
+    default_search_choice = "1"
+    if existing:
+        try:
+            default_search_choice = str(search_providers.index(existing.search_provider) + 1)
+        except ValueError:
+            pass
+
+    search_choice = Prompt.ask(
+        "Select search provider",
+        choices=["1", "2"],
+        default=default_search_choice,
     )
+    search_provider = search_providers[int(search_choice) - 1]
 
-    existing_brave = existing.brave.api_key if existing else ""
-    if existing_brave:
-        console.print(f"  Current key: {_mask_key(existing_brave)}")
-
-    brave_key = ""
-    if Confirm.ask("Configure Brave Search?", default=bool(existing_brave)):
-        brave_key = Prompt.ask(
-            "Brave API key",
-            password=True,
-            default=existing_brave if existing_brave else "",
+    # --- Step 6: Search API key ---
+    console.print()
+    if search_provider == "brave":
+        console.print("[bold]Step 4:[/bold] Brave Search API Key [dim](optional)[/dim]")
+        console.print(
+            "  [dim]Get one at: https://brave.com/search/api/[/dim]"
         )
+        existing_key = existing.brave.api_key if existing else ""
+        if existing_key:
+            console.print(f"  Current key: {_mask_key(existing_key)}")
+        
+        search_key = ""
+        if Confirm.ask("Configure Brave Search?", default=bool(existing_key)):
+            search_key = Prompt.ask(
+                "Brave API key",
+                password=True,
+                default=existing_key if existing_key else "",
+            )
+        brave_key = search_key
+        searchx_key = existing.searchx.api_key if existing else ""
+    else:
+        console.print("[bold]Step 4:[/bold] SearchX API Key [dim](optional)[/dim]")
+        console.print(
+            "  [dim]Get one at: https://searchx.dev/ (3K/day free)[/dim]"
+        )
+        existing_key = existing.searchx.api_key if existing else ""
+        if existing_key:
+            console.print(f"  Current key: {_mask_key(existing_key)}")
+        
+        searchx_key = ""
+        if Confirm.ask("Configure SearchX?", default=bool(existing_key)):
+            searchx_key = Prompt.ask(
+                "SearchX API key",
+                password=True,
+                default=existing_key if existing_key else "",
+            )
+        brave_key = existing.brave.api_key if existing else ""
 
     # --- Step 6: Validate LLM provider ---
     console.print()
@@ -272,7 +335,25 @@ def init() -> None:
         if not Confirm.ask("Continue anyway?", default=False):
             raise typer.Exit(1)
 
-    # --- Step 7: Validate GitHub token ---
+    # --- Step 7: Validate search provider ---
+    if search_provider == "brave" and brave_key:
+        with console.status("[cyan]Validating Brave Search...[/cyan]"):
+            ok, msg = _validate_brave_key(brave_key)
+        if ok:
+            console.print(f"  ✅ Brave Search: {msg}")
+        else:
+            console.print(f"  ❌ Brave Search: {msg}")
+    elif search_provider == "searchx" and searchx_key:
+        with console.status("[cyan]Validating SearchX...[/cyan]"):
+            ok, msg = _validate_searchx_key(searchx_key)
+        if ok:
+            console.print(f"  ✅ SearchX: {msg}")
+        else:
+            console.print(f"  ❌ SearchX: {msg}")
+    else:
+        console.print(f"  ⚠️  {search_provider.capitalize()} API key not provided — search will not work")
+
+    # --- Step 8: Validate GitHub token ---
     if gh_token:
         with console.status("[cyan]Validating GitHub token...[/cyan]"):
             ok, msg = _validate_github_token(gh_token)
@@ -283,7 +364,7 @@ def init() -> None:
     else:
         console.print("  ⚠️  GitHub token not provided — issue fetching will not work")
 
-    # --- Step 8: Build and save config ---
+    # --- Step 9: Build and save config ---
     config = SpecSyncConfig(
         llm=LLMConfig(
             provider=provider,
@@ -298,6 +379,8 @@ def init() -> None:
             default_repo=existing.github.default_repo if existing else "",
         ),
         brave=BraveConfig(api_key=brave_key),
+        searchx=SearchXConfig(api_key=searchx_key),
+        search_provider=search_provider,
         output=OutputConfig(
             verbosity=existing.output.verbosity if existing else "normal",
         ),
@@ -356,7 +439,9 @@ def config(
             table.add_row("llm.fallback.model", cfg.llm.fallback.model)
         table.add_row("github.token", _mask_key(cfg.github.token) if cfg.github.token else "")
         table.add_row("github.default_repo", cfg.github.default_repo or "")
+        table.add_row("search_provider", cfg.search_provider)
         table.add_row("brave.api_key", _mask_key(cfg.brave.api_key) if cfg.brave.api_key else "")
+        table.add_row("searchx.api_key", _mask_key(cfg.searchx.api_key) if cfg.searchx.api_key else "")
         table.add_row("output.verbosity", cfg.output.verbosity)
 
         console.print()
@@ -507,13 +592,20 @@ def doctor() -> None:
     else:
         table.add_row("GitHub Token", "❌", "Not configured")
 
-    # 4. Brave Search API key
-    if cfg and cfg.brave.api_key:
-        with console.status("[dim]Checking Brave Search...[/dim]"):
-            ok, msg = _validate_brave_key(cfg.brave.api_key)
-        table.add_row("Brave Search", "✅" if ok else "❌", msg)
+    # 4. Search provider
+    if cfg:
+        if cfg.search_provider == "brave" and cfg.brave.api_key:
+            with console.status("[dim]Checking Brave Search...[/dim]"):
+                ok, msg = _validate_brave_key(cfg.brave.api_key)
+            table.add_row("Brave Search", "✅" if ok else "❌", msg)
+        elif cfg.search_provider == "searchx" and cfg.searchx.api_key:
+            with console.status("[dim]Checking SearchX...[/dim]"):
+                ok, msg = _validate_searchx_key(cfg.searchx.api_key)
+            table.add_row("SearchX", "✅" if ok else "❌", msg)
+        else:
+            table.add_row(f"{cfg.search_provider.capitalize()} Search", "⚠️", "Not configured (optional)")
     else:
-        table.add_row("Brave Search", "⚠️", "Not configured (optional)")
+        table.add_row("Search Provider", "❌", "No config")
 
     # 5. Node.js
     ok, msg = _check_command(["node", "--version"])
