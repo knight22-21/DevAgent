@@ -500,7 +500,182 @@ def index(
     clear: bool = typer.Option(False, "--clear", help="Wipe index for current project"),
 ) -> None:
     """Index the current project's codebase for semantic search."""
-    console.print("[yellow]Not yet implemented.[/yellow]")
+    import asyncio
+
+    from specsync.core.project import detect_project_root
+    from specsync.core.storage import (
+        clear_project_index,
+        ensure_dirs,
+        get_changed_files_count,
+        get_chroma_dir,
+        get_index_status,
+        get_sqlite_path,
+    )
+
+    # Detect project root
+    project_root, found_marker = detect_project_root()
+    if not found_marker:
+        console.print(
+            "[yellow]⚠️  No project marker found (.git, pyproject.toml, etc.). "
+            f"Using current directory: {project_root}[/yellow]\n"
+        )
+    else:
+        console.print(f"[dim]Project root: {project_root}[/dim]\n")
+
+    ensure_dirs(project_root)
+    sqlite_path = get_sqlite_path(project_root)
+
+    # --- --status flag ---
+    if status:
+        idx_status = asyncio.run(get_index_status(sqlite_path))
+
+        if not idx_status["exists"]:
+            console.print(
+                Panel(
+                    "This project has not been indexed yet.\n"
+                    "Run [bold cyan]specsync index[/bold cyan] to create the index.",
+                    title="📊 Index Status",
+                    border_style="yellow",
+                )
+            )
+            return
+
+        # Check for changes
+        changes = asyncio.run(get_changed_files_count(project_root, sqlite_path))
+
+        table = Table(title="📊 Index Status", border_style="cyan")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value", justify="right")
+
+        table.add_row("Indexed files", str(idx_status["total_files"]))
+        table.add_row("Total chunks", str(idx_status["total_chunks"]))
+        table.add_row("Last indexed", idx_status["last_indexed"] or "never")
+        table.add_row("Changed files", str(changes["changed"]))
+        table.add_row("New files", str(changes["new"]))
+        table.add_row("Deleted files", str(changes["deleted"]))
+
+        console.print(table)
+
+        total_changes = changes["changed"] + changes["new"] + changes["deleted"]
+        if total_changes > 0:
+            console.print(
+                f"\n[yellow]⚠️  {total_changes} file(s) changed since last index. "
+                "Run [bold]specsync index[/bold] to update.[/yellow]"
+            )
+        else:
+            console.print("\n[green]✅ Index is up to date.[/green]")
+        return
+
+    # --- --clear flag ---
+    if clear:
+        chroma_dir = get_chroma_dir(project_root)
+        if not sqlite_path.exists() and not chroma_dir.exists():
+            console.print("[yellow]No index found for this project.[/yellow]")
+            return
+
+        if not Confirm.ask(
+            "[red]This will delete the entire index for this project. Continue?[/red]",
+            default=False,
+        ):
+            console.print("[dim]Cancelled.[/dim]")
+            return
+
+        clear_project_index(project_root)
+        console.print("[green]✅ Index cleared successfully.[/green]")
+        return
+
+    # --- Default: run indexing ---
+    if not config_exists():
+        console.print(
+            Panel(
+                "No configuration found. Run [bold cyan]specsync init[/bold cyan] first.",
+                title="❌ No Config",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
+
+    incremental = not full
+
+    console.print(
+        Panel(
+            f"[bold cyan]Indexing project...[/bold cyan]\n"
+            f"Mode: [cyan]{'incremental' if incremental else 'full rebuild'}[/cyan]\n"
+            f"Project: [dim]{project_root}[/dim]",
+            title="🔍 SpecSync Indexer",
+            border_style="cyan",
+        )
+    )
+
+    async def _run_index() -> dict:
+        """Launch CodeSearchMCP and run indexing."""
+        import json
+        import sys
+
+        from mcp import ClientSession
+        from mcp.client.stdio import StdioServerParameters, stdio_client
+
+        from specsync.core.storage import get_config_path
+
+        import os
+        env = os.environ.copy()
+        env["SPECSYNC_CONFIG_PATH"] = str(get_config_path())
+
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "specsync.mcp.servers.code_search.server"],
+            env=env,
+        )
+
+        async with stdio_client(params) as transport:
+            async with ClientSession(*transport) as session:
+                await session.initialize()
+
+                result = await session.call_tool(
+                    "index_codebase",
+                    {
+                        "project_root": str(project_root.resolve()),
+                        "incremental": incremental,
+                    },
+                )
+
+                if result.isError:
+                    error_text = result.content[0].text if result.content else "Unknown error"
+                    raise RuntimeError(f"Indexing failed: {error_text}")
+
+                text = result.content[0].text if result.content else "{}"
+                return json.loads(text)
+
+    try:
+        with console.status("[cyan]Indexing codebase (this may take a moment on first run)...[/cyan]"):
+            result = asyncio.run(_run_index())
+
+        # Show summary
+        table = Table(border_style="green")
+        table.add_column("Metric", style="bold")
+        table.add_column("Value", justify="right")
+
+        table.add_row("Files indexed", str(result.get("files_indexed", 0)))
+        table.add_row("Chunks created", str(result.get("chunks_created", 0)))
+        table.add_row("Files skipped (unchanged)", str(result.get("files_skipped", 0)))
+        table.add_row("Duration", f"{result.get('duration_seconds', 0):.1f}s")
+
+        console.print()
+        console.print(table)
+
+        chroma_dir = get_chroma_dir(project_root)
+        console.print(f"\n[dim]Index stored at: {chroma_dir.parent}[/dim]")
+        console.print("[green]✅ Indexing complete.[/green]")
+
+    except Exception as exc:
+        console.print(
+            Panel(
+                f"[red bold]Indexing failed[/red bold]\n\n{exc}",
+                title="❌ Error",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
 
 
 @app.command()
