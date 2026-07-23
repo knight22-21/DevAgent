@@ -68,7 +68,7 @@ async def _init_db(db_path: Path) -> None:
 
 
 @mcp.tool()
-async def index_codebase(project_root: str, incremental: bool = True) -> str:
+async def index_codebase(project_root: str, incremental: bool = True):
     """Index the codebase for semantic search.
 
     Args:
@@ -104,6 +104,7 @@ async def index_codebase(project_root: str, incremental: bool = True) -> str:
     
     new_records = []
     updated_records = []
+    seen_on_disk: set[str] = set()
     
     for file_path in root_path.rglob("*"):
         if not file_path.is_file():
@@ -118,6 +119,7 @@ async def index_codebase(project_root: str, incremental: bool = True) -> str:
             continue
             
         rel_path = file_path.relative_to(root_path).as_posix()
+        seen_on_disk.add(rel_path)
         
         if incremental and rel_path in indexed_files:
             if mtime <= indexed_files[rel_path]:
@@ -171,7 +173,16 @@ async def index_codebase(project_root: str, incremental: bool = True) -> str:
             updated_records.append((mtime, len(chunks), now_iso, rel_path))
         else:
             new_records.append((rel_path, mtime, len(chunks), now_iso))
-            
+
+    # Phase 3.3 — Stale file cleanup: remove files that no longer exist on disk
+    deleted_paths = []
+    if incremental and indexed_files:
+        for indexed_path in indexed_files:
+            if indexed_path not in seen_on_disk:
+                # File was deleted from disk — clean up from ChromaDB and SQLite
+                collection.delete(where={"file_path": indexed_path})
+                deleted_paths.append(indexed_path)
+
     # Update SQLite
     async with aiosqlite.connect(sqlite_path) as db:
         if new_records:
@@ -184,6 +195,11 @@ async def index_codebase(project_root: str, incremental: bool = True) -> str:
                 "UPDATE indexed_files SET last_modified=?, chunk_count=?, indexed_at=? WHERE file_path=?",
                 updated_records
             )
+        if deleted_paths:
+            await db.executemany(
+                "DELETE FROM indexed_files WHERE file_path=?",
+                [(p,) for p in deleted_paths]
+            )
         await db.commit()
         
     duration = time.monotonic() - start_time
@@ -192,6 +208,7 @@ async def index_codebase(project_root: str, incremental: bool = True) -> str:
         "files_indexed": files_indexed,
         "chunks_created": chunks_created,
         "files_skipped": files_skipped,
+        "files_deleted": len(deleted_paths),
         "duration_seconds": duration
     }
     
@@ -199,7 +216,7 @@ async def index_codebase(project_root: str, incremental: bool = True) -> str:
 
 
 @mcp.tool()
-async def semantic_search(query: str, project_root: str, top_k: int = 5, filter_language: str | None = None) -> str:
+async def semantic_search(query: str, project_root: str, top_k: int = 5, filter_language: str | None = None):
     """Search the codebase for semantic matches.
 
     Args:
@@ -260,7 +277,7 @@ async def semantic_search(query: str, project_root: str, top_k: int = 5, filter_
 
 
 @mcp.tool()
-async def get_import_graph(project_root: str) -> str:
+async def get_import_graph(project_root: str):
     """Get the full import dependency graph for the project.
 
     Returns:
@@ -271,7 +288,7 @@ async def get_import_graph(project_root: str) -> str:
 
 
 @mcp.tool()
-async def detect_conflicts(file_path: str, proposed_change_description: str, project_root: str) -> str:
+async def detect_conflicts(file_path: str, proposed_change_description: str, project_root: str):
     """Detect potential conflicts for a proposed change to a file.
 
     Returns:
@@ -301,7 +318,7 @@ async def detect_conflicts(file_path: str, proposed_change_description: str, pro
 
 
 @mcp.tool()
-async def find_similar_implementations(description: str, exclude_files: list[str], project_root: str) -> str:
+async def find_similar_implementations(description: str, exclude_files: list[str], project_root: str):
     """Find existing implementations matching a description.
 
     Returns:
