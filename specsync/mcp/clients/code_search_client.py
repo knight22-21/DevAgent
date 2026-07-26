@@ -12,8 +12,8 @@ class CodeSearchClient:
     def __init__(self, mcp_client: MCPClient):
         self._client = mcp_client
 
-    async def semantic_search(self, query: str, top_k: int = 5, filter_language: str | None = None) -> list[SearchResult]:
-        args = {"query": query, "top_k": top_k}
+    async def semantic_search(self, query: str, project_root: str, top_k: int = 5, filter_language: str | None = None) -> list[SearchResult]:
+        args = {"query": query, "project_root": project_root, "top_k": top_k}
         if filter_language:
             args["filter_language"] = filter_language
         result = await self._client.call_tool("semantic_search", args)
@@ -34,18 +34,20 @@ class CodeSearchClient:
         })
         return json.loads(result)
 
-    async def detect_conflicts(self, file_path: str, proposed_change_description: str) -> ConflictResult:
+    async def detect_conflicts(self, file_path: str, proposed_change_description: str, project_root: str) -> ConflictResult:
         result = await self._client.call_tool("detect_conflicts", {
             "file_path": file_path,
-            "proposed_change_description": proposed_change_description
+            "proposed_change_description": proposed_change_description,
+            "project_root": project_root
         })
         data = json.loads(result)
         return ConflictResult(**data)
 
-    async def find_similar_implementations(self, description: str, exclude_files: list[str]) -> list[SearchResult]:
+    async def find_similar_implementations(self, description: str, exclude_files: list[str], project_root: str) -> list[SearchResult]:
         result = await self._client.call_tool("find_similar_implementations", {
             "description": description,
-            "exclude_files": exclude_files
+            "exclude_files": exclude_files,
+            "project_root": project_root
         })
         data = json.loads(result)
         return [SearchResult(**res) for res in data]

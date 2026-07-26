@@ -30,7 +30,7 @@ def _get_api_key() -> str:
 
 
 @mcp.tool()
-def searchx_web_search(query: str, count: int = 10) -> str:
+def searchx_web_search(query: str, count: int = 10):
     """Search the web using SearchX API.
 
     Args:

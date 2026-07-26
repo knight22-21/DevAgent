@@ -692,7 +692,95 @@ def analyze(
     ),
 ) -> None:
     """Run full gap analysis on a spec against the current codebase."""
-    console.print("[yellow]Not yet implemented.[/yellow]")
+    import asyncio
+
+    from specsync.agents.pipeline import run_pipeline
+    from specsync.core.project import detect_project_root
+    from specsync.core.storage import ensure_dirs
+    from specsync.mcp.manager import MCPManager
+
+    # Validate inputs
+    if not any([issue, spec, text]):
+        console.print("[red]Error: Provide one of --issue, --spec, or --text[/red]")
+        raise typer.Exit(1)
+
+    # Load config
+    if not config_exists():
+        console.print(
+            Panel(
+                "No configuration found. Run [bold cyan]specsync init[/bold cyan] first.",
+                title="❌ No Config",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
+
+    cfg = load_config()
+
+    # Detect project root
+    project_root, found_marker = detect_project_root()
+    if not found_marker:
+        console.print(
+            "[yellow]⚠️  No project marker found (.git, pyproject.toml, etc.). "
+            f"Using current directory: {project_root}[/yellow]\n"
+        )
+    else:
+        console.print(f"[dim]Project root: {project_root}[/dim]\n")
+
+    ensure_dirs(project_root)
+
+    # Get spec text
+    spec_text = ""
+    spec_source = ""
+    if text:
+        spec_text = text
+        spec_source = "inline"
+    elif spec:
+        spec_path = Path(spec)
+        if not spec_path.exists():
+            console.print(f"[red]Spec file not found: {spec}[/red]")
+            raise typer.Exit(1)
+        spec_text = spec_path.read_text(encoding="utf-8")
+        spec_source = str(spec_path)
+    elif issue:
+        # Fetch from GitHub
+        if not cfg.github.token:
+            console.print("[red]GitHub token required for --issue[/red]")
+            raise typer.Exit(1)
+        if repo:
+            owner, repo_name = repo.split("/", 1)
+        elif cfg.github.default_repo:
+            owner, repo_name = cfg.github.default_repo.split("/", 1)
+        else:
+            console.print("[red]Provide --repo or set github.default_repo in config[/red]")
+            raise typer.Exit(1)
+
+        console.print(f"[cyan]Fetching issue {issue} from {owner}/{repo_name}...[/cyan]")
+        # TODO: Implement GitHub issue fetching via MCP
+        console.print("[yellow]GitHub issue fetching not yet implemented. Use --spec or --text.[/yellow]")
+        raise typer.Exit(1)
+
+    # Run pipeline
+    async def _run():
+        async with MCPManager(cfg, project_root) as manager:
+            report = await run_pipeline(cfg, manager, spec_text, spec_source, str(project_root))
+            return report
+
+    try:
+        report = asyncio.run(_run())
+        console.print(f"\n[green]✅ Analysis complete![/green]")
+        console.print(f"\n[dim]Report generated at: {report.generated_at}[/dim]")
+        console.print(f"\n[dim]{len(report.reuse)} reusable, {len(report.extend)} to extend, "
+                     f"{len(report.conflicts)} conflicts, {len(report.net_new)} net new[/dim]")
+    except Exception as exc:
+        console.print(
+            Panel(
+                f"[red bold]Analysis failed[/red bold]\n\n{exc}",
+                title="❌ Error",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
 
 
 @app.command()

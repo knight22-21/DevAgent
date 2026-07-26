@@ -29,7 +29,7 @@ def _get_llm() -> Any:
 
 
 @mcp.tool()
-def parse_spec_to_requirements(spec_text: str, context: str = "") -> str:
+async def parse_spec_to_requirements(spec_text: str, context: str = ""):
     """Extract structured, atomic requirements from a raw specification.
 
     Args:
@@ -62,7 +62,11 @@ def parse_spec_to_requirements(spec_text: str, context: str = "") -> str:
     ]
     
     # Attempt 1
-    response = llm.invoke(messages)
+    try:
+        response = await llm.ainvoke(messages)
+    except AttributeError:
+        # Fallback to sync if ainvoke not available
+        response = llm.invoke(messages)
     content = response.content
     
     try:
@@ -111,7 +115,7 @@ def parse_spec_to_requirements(spec_text: str, context: str = "") -> str:
 
 
 @mcp.tool()
-def infer_edge_cases(requirements: list[dict], spec_text: str) -> str:
+async def infer_edge_cases(requirements: list[dict], spec_text: str):
     """Infer edge cases implied by the specification.
 
     Args:
@@ -138,7 +142,10 @@ def infer_edge_cases(requirements: list[dict], spec_text: str) -> str:
         {"role": "user", "content": f"Spec:\n{spec_text}\n\nRequirements:\n{req_str}"}
     ]
     
-    response = llm.invoke(messages)
+    try:
+        response = await llm.ainvoke(messages)
+    except AttributeError:
+        response = llm.invoke(messages)
     content = response.content
     if content.startswith("```json"):
         content = content[7:-3].strip()
@@ -155,7 +162,7 @@ def infer_edge_cases(requirements: list[dict], spec_text: str) -> str:
 
 
 @mcp.tool()
-def extract_data_models(spec_text: str) -> str:
+async def extract_data_models(spec_text: str):
     """Extract implied data model changes from the specification.
 
     Args:
@@ -178,7 +185,10 @@ def extract_data_models(spec_text: str) -> str:
         {"role": "user", "content": spec_text}
     ]
     
-    response = llm.invoke(messages)
+    try:
+        response = await llm.ainvoke(messages)
+    except AttributeError:
+        response = llm.invoke(messages)
     content = response.content
     if content.startswith("```json"):
         content = content[7:-3].strip()
@@ -194,7 +204,7 @@ def extract_data_models(spec_text: str) -> str:
 
 
 @mcp.tool()
-def identify_api_changes(spec_text: str) -> str:
+async def identify_api_changes(spec_text: str):
     """Extract implied API changes from the specification.
 
     Args:
@@ -217,7 +227,10 @@ def identify_api_changes(spec_text: str) -> str:
         {"role": "user", "content": spec_text}
     ]
     
-    response = llm.invoke(messages)
+    try:
+        response = await llm.ainvoke(messages)
+    except AttributeError:
+        response = llm.invoke(messages)
     content = response.content
     if content.startswith("```json"):
         content = content[7:-3].strip()
