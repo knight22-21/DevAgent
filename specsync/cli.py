@@ -684,7 +684,7 @@ def analyze(
     spec: Optional[str] = typer.Option(None, "--spec", "-s", help="Path to a spec file (markdown/text)"),
     text: Optional[str] = typer.Option(None, "--text", "-t", help="Inline spec text to analyze"),
     output: Optional[str] = typer.Option(
-        None, "--output", "-o",
+        "both", "--output", "-o",
         help="Output format: terminal, markdown, both, json",
     ),
     repo: Optional[str] = typer.Option(
@@ -693,94 +693,103 @@ def analyze(
 ) -> None:
     """Run full gap analysis on a spec against the current codebase."""
     import asyncio
+    import json
+    from pathlib import Path
 
     from specsync.agents.pipeline import run_pipeline
     from specsync.core.project import detect_project_root
-    from specsync.core.storage import ensure_dirs
+    from specsync.core.storage import get_index_status, get_sqlite_path
     from specsync.mcp.manager import MCPManager
+    from specsync.output.markdown import generate_markdown_report
+    from specsync.output.terminal import render_gap_report
 
-    # Validate inputs
-    if not any([issue, spec, text]):
-        console.print("[red]Error: Provide one of --issue, --spec, or --text[/red]")
-        raise typer.Exit(1)
-
-    # Load config
     if not config_exists():
-        console.print(
-            Panel(
-                "No configuration found. Run [bold cyan]specsync init[/bold cyan] first.",
-                title="❌ No Config",
-                border_style="red",
-            )
-        )
+        console.print("[red]No config found. Run [bold]specsync init[/bold] first.[/red]")
         raise typer.Exit(1)
 
-    cfg = load_config()
+    config = load_config()
+    project_root, _ = detect_project_root()
+    project_name = project_root.name
 
-    # Detect project root
-    project_root, found_marker = detect_project_root()
-    if not found_marker:
-        console.print(
-            "[yellow]⚠️  No project marker found (.git, pyproject.toml, etc.). "
-            f"Using current directory: {project_root}[/yellow]\n"
-        )
-    else:
-        console.print(f"[dim]Project root: {project_root}[/dim]\n")
+    # Check if indexed
+    sqlite_path = get_sqlite_path(project_root)
+    idx_status = asyncio.run(get_index_status(sqlite_path))
+    if not idx_status["exists"]:
+        console.print("[yellow]⚠️ This project has not been indexed yet.[/yellow]")
+        if Confirm.ask("Do you want to index it now?"):
+            index(full=False, status=False, clear=False)
+        else:
+            console.print("[red]Analysis requires an indexed project. Exiting.[/red]")
+            raise typer.Exit(1)
 
-    ensure_dirs(project_root)
-
-    # Get spec text
-    spec_text = ""
+    # Determine spec source and text
     spec_source = ""
-    if text:
-        spec_text = text
-        spec_source = "inline"
+    spec_text = ""
+
+    if issue:
+        if not config.github.token:
+            console.print("[red]GitHub token required to fetch issues. Run [bold]specsync init[/bold][/red]")
+            raise typer.Exit(1)
+        repo_name = repo or config.github.default_repo
+        if not repo_name:
+            console.print("[red]GitHub repo required. Pass --repo owner/repo or set default in config.[/red]")
+            raise typer.Exit(1)
+        
+        spec_source = f"https://github.com/{repo_name}/issues/{issue}"
+        
+        # Quick MCP client just for github
+        async def fetch_issue():
+            async with MCPManager(config, project_root) as mcp:
+                if not mcp.github:
+                    raise RuntimeError("GitHub MCP not available")
+                owner, r = repo_name.split("/")
+                return await mcp.github.get_issue(owner, r, issue)
+                
+        with console.status(f"[cyan]Fetching issue #{issue}...[/cyan]"):
+            try:
+                issue_data = asyncio.run(fetch_issue())
+                spec_text = f"Title: {issue_data.get('title', '')}\n\nBody:\n{issue_data.get('body', '')}"
+            except Exception as e:
+                console.print(f"[red]Failed to fetch issue: {e}[/red]")
+                raise typer.Exit(1)
+                
     elif spec:
         spec_path = Path(spec)
         if not spec_path.exists():
             console.print(f"[red]Spec file not found: {spec}[/red]")
             raise typer.Exit(1)
+        spec_source = spec_path.name
         spec_text = spec_path.read_text(encoding="utf-8")
-        spec_source = str(spec_path)
-    elif issue:
-        # Fetch from GitHub
-        if not cfg.github.token:
-            console.print("[red]GitHub token required for --issue[/red]")
-            raise typer.Exit(1)
-        if repo:
-            owner, repo_name = repo.split("/", 1)
-        elif cfg.github.default_repo:
-            owner, repo_name = cfg.github.default_repo.split("/", 1)
-        else:
-            console.print("[red]Provide --repo or set github.default_repo in config[/red]")
-            raise typer.Exit(1)
-
-        console.print(f"[cyan]Fetching issue {issue} from {owner}/{repo_name}...[/cyan]")
-        # TODO: Implement GitHub issue fetching via MCP
-        console.print("[yellow]GitHub issue fetching not yet implemented. Use --spec or --text.[/yellow]")
+        
+    elif text:
+        spec_source = "Inline Text"
+        spec_text = text
+        
+    else:
+        console.print("[red]Must provide one of: --issue, --spec, or --text[/red]")
         raise typer.Exit(1)
 
-    # Run pipeline
-    async def _run():
-        async with MCPManager(cfg, project_root) as manager:
-            report = await run_pipeline(cfg, manager, spec_text, spec_source, str(project_root))
-            return report
+    # Run the pipeline
+    async def run_analysis():
+        async with MCPManager(config, project_root) as mcp:
+            return await run_pipeline(config, mcp, spec_text, spec_source, str(project_root))
 
-    try:
-        report = asyncio.run(_run())
-        console.print(f"\n[green]✅ Analysis complete![/green]")
-        console.print(f"\n[dim]Report generated at: {report.generated_at}[/dim]")
-        console.print(f"\n[dim]{len(report.reuse)} reusable, {len(report.extend)} to extend, "
-                     f"{len(report.conflicts)} conflicts, {len(report.net_new)} net new[/dim]")
-    except Exception as exc:
-        console.print(
-            Panel(
-                f"[red bold]Analysis failed[/red bold]\n\n{exc}",
-                title="❌ Error",
-                border_style="red",
-            )
-        )
-        raise typer.Exit(1)
+    report = asyncio.run(run_analysis())
+
+    # Handle output
+    if output == "json":
+        print(report.model_dump_json(indent=2))
+        return
+
+    md_path = None
+    if output in ("markdown", "both"):
+        md_path = generate_markdown_report(report, project_root, project_name)
+        if output == "markdown":
+            console.print(f"[green]✅ Markdown report saved to: [cyan]{md_path}[/cyan][/green]")
+            return
+
+    if output in ("terminal", "both"):
+        render_gap_report(report, project_name, md_path)
 
 
 @app.command()
@@ -788,7 +797,51 @@ def search(
     query: str = typer.Argument(..., help="Semantic search query"),
 ) -> None:
     """Semantic search across the indexed codebase."""
-    console.print("[yellow]Not yet implemented.[/yellow]")
+    import asyncio
+    from specsync.core.project import detect_project_root
+    
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]specsync init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    project_root, _ = detect_project_root()
+    
+    async def do_search():
+        from specsync.mcp.manager import MCPManager
+        
+        async with MCPManager(load_config(), project_root) as mcp:
+            if not mcp.code_search:
+                raise RuntimeError("CodeSearch MCP not available")
+            return await mcp.code_search.semantic_search(query, top_k=5)
+            
+    with console.status("[cyan]Searching codebase...[/cyan]"):
+        try:
+            results = asyncio.run(do_search())
+        except Exception as e:
+            console.print(f"[red]Search failed: {e}[/red]")
+            raise typer.Exit(1)
+            
+    if not results:
+        console.print("[yellow]No relevant matches found.[/yellow]")
+        return
+        
+    table = Table(title=f"Search Results for: '{query}'", border_style="cyan")
+    table.add_column("File", style="cyan")
+    table.add_column("Type / Name", style="magenta")
+    table.add_column("Score", justify="right")
+    table.add_column("Snippet")
+    
+    for r in results:
+        lines = r.content.strip().splitlines()
+        first_line = lines[0].strip() if lines else ""
+        if len(first_line) > 50:
+            first_line = first_line[:47] + "..."
+            
+        score_pct = f"{r.similarity_score * 100:.1f}%"
+        table.add_row(r.file_path, f"{r.chunk_type}: {r.name}", score_pct, first_line)
+        
+    console.print()
+    console.print(table)
 
 
 @app.command()
