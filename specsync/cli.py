@@ -37,6 +37,56 @@ app = typer.Typer(
 
 console = Console()
 
+# Global verbose flag
+_verbose = False
+
+
+@app.callback()
+def main(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full tracebacks on error."),
+) -> None:
+    """SpecSync — Requirements-to-code gap analysis for developers."""
+    global _verbose
+    _verbose = verbose
+
+
+def _handle_error(exc: Exception) -> None:
+    """Display a user-friendly error panel instead of a raw traceback."""
+    import traceback
+    from specsync.mcp.manager import NodeNotFoundError
+
+    # Map known exceptions to friendly messages
+    error_msg = str(exc)
+    hint = ""
+
+    if isinstance(exc, NodeNotFoundError):
+        error_msg = "Node.js is required for SpecSync."
+        hint = "Download it from: https://nodejs.org/"
+    elif "ConnectError" in type(exc).__name__ or "Connection refused" in error_msg:
+        error_msg = "Ollama is not reachable."
+        hint = "Start it with: ollama serve"
+    elif "401" in error_msg or "token" in error_msg.lower() and "invalid" in error_msg.lower():
+        error_msg = "Your GitHub token appears to be invalid or expired."
+        hint = "Run: specsync init  to update it."
+    elif "rate" in error_msg.lower() and "limit" in error_msg.lower():
+        error_msg = "API rate limit reached."
+        hint = "Wait a moment and try again, or switch to a different LLM provider."
+    elif "not indexed" in error_msg.lower():
+        error_msg = "This project has not been indexed yet."
+        hint = "Run: specsync index"
+
+    body = f"[red bold]{error_msg}[/red bold]"
+    if hint:
+        body += f"\n\n[yellow]💡 {hint}[/yellow]"
+
+    if _verbose:
+        body += f"\n\n[dim]{traceback.format_exc()}[/dim]"
+
+    console.print(
+        Panel(body, title="❌ Error", border_style="red")
+    )
+    raise typer.Exit(1)
+
 # ---------------------------------------------------------------------------
 # Provider defaults
 # ---------------------------------------------------------------------------
@@ -481,6 +531,28 @@ def config(
             console.print(f"[red]Unknown config key: {key}[/red]")
             raise typer.Exit(1)
 
+        # Validate specific keys before setting
+        valid_providers = ["ollama", "groq", "anthropic", "openai", "gemini"]
+        valid_search = ["brave", "searchx"]
+
+        if key == "llm.provider" and value not in valid_providers:
+            console.print(f"[red]Invalid provider '{value}'. Must be one of: {', '.join(valid_providers)}[/red]")
+            raise typer.Exit(1)
+
+        if key == "search_provider" and value not in valid_search:
+            console.print(f"[red]Invalid search provider '{value}'. Must be one of: {', '.join(valid_search)}[/red]")
+            raise typer.Exit(1)
+
+        if key == "llm.temperature":
+            try:
+                temp = float(value)
+                if not (0.0 <= temp <= 2.0):
+                    console.print("[red]Temperature must be between 0.0 and 2.0[/red]")
+                    raise typer.Exit(1)
+            except ValueError:
+                console.print("[red]Temperature must be a number[/red]")
+                raise typer.Exit(1)
+
         # Type coercion
         current = getattr(obj, final_key)
         if isinstance(current, float):
@@ -774,7 +846,13 @@ def analyze(
         async with MCPManager(config, project_root) as mcp:
             return await run_pipeline(config, mcp, spec_text, spec_source, str(project_root))
 
-    report = asyncio.run(run_analysis())
+    try:
+        report = asyncio.run(run_analysis())
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        _handle_error(exc)
+        return  # unreachable but satisfies type checker
 
     # Handle output
     if output == "json":
@@ -817,9 +895,11 @@ def search(
     with console.status("[cyan]Searching codebase...[/cyan]"):
         try:
             results = asyncio.run(do_search())
-        except Exception as e:
-            console.print(f"[red]Search failed: {e}[/red]")
-            raise typer.Exit(1)
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            _handle_error(exc)
+            return
             
     if not results:
         console.print("[yellow]No relevant matches found.[/yellow]")
@@ -847,11 +927,98 @@ def search(
 @app.command()
 def reports(
     show: Optional[str] = typer.Option(
-        None, "--show", help="Re-display a saved report by ID"
+        None, "--show", help="Re-display a saved report by filename or partial match"
     ),
 ) -> None:
     """List or display saved analysis reports for the current project."""
-    console.print("[yellow]Not yet implemented.[/yellow]")
+    import re
+    from rich.markdown import Markdown
+
+    from specsync.core.project import detect_project_root
+    from specsync.core.storage import get_reports_dir
+
+    project_root, _ = detect_project_root()
+    reports_dir = get_reports_dir(project_root)
+
+    if not reports_dir.exists() or not any(reports_dir.iterdir()):
+        console.print(
+            Panel(
+                "No reports found for this project.\n"
+                "Run [bold cyan]specsync analyze[/bold cyan] to generate one.",
+                title="📄 Reports",
+                border_style="yellow",
+            )
+        )
+        return
+
+    report_files = sorted(reports_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not report_files:
+        console.print("[yellow]No markdown reports found in the reports directory.[/yellow]")
+        return
+
+    # --- --show flag ---
+    if show:
+        # Find the report by exact filename or partial match
+        match = None
+        for rf in report_files:
+            if rf.name == show or rf.stem == show or show in rf.name:
+                match = rf
+                break
+
+        if not match:
+            console.print(f"[red]No report matching '{show}' found.[/red]")
+            console.print("[dim]Available reports:[/dim]")
+            for rf in report_files:
+                console.print(f"  • {rf.stem}")
+            return
+
+        content = match.read_text(encoding="utf-8")
+        console.print()
+        console.print(Panel(f"[dim]{match.name}[/dim]", title="📄 Report", border_style="cyan"))
+        console.print(Markdown(content))
+        return
+
+    # --- Default: list all reports ---
+    table = Table(title="📄 Saved Reports", border_style="cyan")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Report", style="cyan")
+    table.add_column("Source")
+    table.add_column("Date")
+    table.add_column("Reqs", justify="right")
+    table.add_column("Conflicts", justify="right", style="red")
+
+    for i, rf in enumerate(report_files, 1):
+        content = rf.read_text(encoding="utf-8")
+        lines = content.splitlines()
+
+        # Parse header for source and date
+        source = ""
+        date = ""
+        req_count = 0
+        conflict_count = 0
+
+        for line in lines[:10]:
+            if line.startswith("**Source:**"):
+                source = line.replace("**Source:**", "").strip().rstrip(" ")
+            elif line.startswith("**Generated:**"):
+                date = line.replace("**Generated:**", "").strip().rstrip(" ")
+
+        # Count requirements (lines starting with ####)
+        req_count = content.count("#### REQ-")
+        # Count conflicts (lines containing CONFLICT)
+        conflict_count = content.count("🚨 CONFLICT")
+
+        # Truncate source for table display
+        if len(source) > 40:
+            source = source[:37] + "..."
+
+        table.add_row(str(i), rf.stem, source, date, str(req_count), str(conflict_count))
+
+    console.print()
+    console.print(table)
+    console.print(f"\n[dim]Reports directory: {reports_dir}[/dim]")
+    console.print("[dim]Use [bold]specsync reports --show <name>[/bold] to view a report.[/dim]")
 
 
 @app.command()
