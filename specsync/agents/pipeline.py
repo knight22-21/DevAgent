@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from typing import Any
-
 from rich.console import Console
-from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from specsync.agents.code_inventory import CodeInventoryAgent
@@ -21,6 +17,11 @@ from specsync.mcp.manager import MCPManager
 console = Console()
 
 
+class PipelineError(Exception):
+    """Raised when the agent pipeline fails at any stage."""
+    pass
+
+
 async def run_pipeline(
     config: SpecSyncConfig, 
     mcp_manager: MCPManager, 
@@ -28,7 +29,11 @@ async def run_pipeline(
     spec_source: str,
     project_root: str
 ) -> GapReport:
-    """Run the full analysis pipeline end-to-end."""
+    """Run the full analysis pipeline end-to-end.
+    
+    Raises PipelineError on any agent failure — the CLI layer
+    catches this and displays a Rich error panel.
+    """
     
     # Initialize agents
     parser = SpecParserAgent(config, mcp_manager)
@@ -62,33 +67,20 @@ async def run_pipeline(
         try:
             state = await parser.app.ainvoke(state)
         except Exception as e:
-            console.print(Panel(
-                f"[red]SpecParserAgent failed:[/red]\n{str(e)}",
-                title="❌ Pipeline Error",
-                border_style="red"
-            ))
-            sys.exit(1)
+            raise PipelineError(f"SpecParserAgent failed: {e}") from e
         progress.update(task1, completed=100, visible=False)
             
         if not state.get("requirements"):
-            console.print(Panel(
-                "No requirements could be extracted from the spec. Try being more specific.",
-                title="❌ Pipeline Error",
-                border_style="red"
-            ))
-            sys.exit(1)
+            raise PipelineError(
+                "No requirements could be extracted from the spec. Try being more specific."
+            )
             
         # 2. CodeInventoryAgent
         task2 = progress.add_task("[cyan]Searching codebase and classifying requirements...", total=None)
         try:
             state = await inventory.app.ainvoke(state)
         except Exception as e:
-            console.print(Panel(
-                f"[red]CodeInventoryAgent failed:[/red]\n{str(e)}",
-                title="❌ Pipeline Error",
-                border_style="red"
-            ))
-            sys.exit(1)
+            raise PipelineError(f"CodeInventoryAgent failed: {e}") from e
         progress.update(task2, completed=100, visible=False)
             
         # 3. GapReportAgent
@@ -96,22 +88,12 @@ async def run_pipeline(
         try:
             state = await reporter.app.ainvoke(state)
         except Exception as e:
-            console.print(Panel(
-                f"[red]GapReportAgent failed:[/red]\n{str(e)}",
-                title="❌ Pipeline Error",
-                border_style="red"
-            ))
-            sys.exit(1)
+            raise PipelineError(f"GapReportAgent failed: {e}") from e
         progress.update(task3, completed=100, visible=False)
             
     # Return the final report
     report = state.get("gap_report")
     if not report:
-        console.print(Panel(
-            "Pipeline completed but no gap report was generated.",
-            title="❌ Pipeline Error",
-            border_style="red"
-        ))
-        sys.exit(1)
+        raise PipelineError("Pipeline completed but no gap report was generated.")
         
     return report
