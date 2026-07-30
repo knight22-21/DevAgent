@@ -7,6 +7,7 @@ It uses platformdirs to resolve correct data/config directories per OS.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import platformdirs
@@ -19,7 +20,11 @@ def get_config_path() -> Path:
     """Return the path to the config file.
 
     On Windows: %APPDATA%\\specsync\\config.toml
+    Can be overridden via SPECSYNC_CONFIG_PATH environment variable.
     """
+    # Check for environment variable override first
+    if "SPECSYNC_CONFIG_PATH" in os.environ:
+        return Path(os.environ["SPECSYNC_CONFIG_PATH"])
     config_dir = Path(platformdirs.user_config_dir(APP_NAME))
     return config_dir / "config.toml"
 
