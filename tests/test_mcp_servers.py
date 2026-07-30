@@ -1,92 +1,80 @@
-"""Tests for MCP servers."""
-"""
-Phase 2 Verification Test Script
-Tests that all 5 MCP servers launch correctly and respond to tool calls.
-"""
-import asyncio
-from pathlib import Path
+import json
+import pytest
+from specsync.core.models import Requirement, RequirementType
 
-from specsync.core.config import load_config, save_config, SpecSyncConfig
-from specsync.core.storage import get_config_path
-from specsync.mcp.manager import MCPManager
+# We need to monkeypatch the LLM call inside the tool
+from specsync.mcp.servers.spec_analysis.server import parse_spec_to_requirements
+from specsync.mcp.servers.code_search.server import semantic_search
 
+@pytest.mark.asyncio
+async def test_parse_spec_to_requirements_mcp(monkeypatch):
+    # Mock the LLM response directly
+    class MockResponse:
+        content = json.dumps([{
+            "id": "REQ-1",
+            "description": "Add a new endpoint",
+            "requirement_type": "api_change",
+            "priority": "high",
+            "raw_text": "The system must have an endpoint."
+        }])
 
-async def test_mcp_servers():
-    """Test each MCP server by calling one tool."""
-    
-    # Load config
-    config = load_config()
-    print(f"✓ Config loaded from: {get_config_path()}")
-    
-    # Don't disable search provider anymore since we have a local SearchX server
-    
-    # Use current directory as project root for testing
-    project_root = Path.cwd()
-    print(f"✓ Project root: {project_root}")
-    
-    async with MCPManager(config, project_root) as manager:
-        print("\n=== Testing MCP Servers ===\n")
-        
-        # Test GitHub MCP
-        try:
-            if config.github.token:
-                # Try to list repositories (lightweight call)
-                result = await manager.github.search_code(
-                    query="test",
-                    owner="octocat",
-                    repo="Hello-World"
-                )
-                print("✓ GitHub MCP: responsive")
-            else:
-                print("⊘ GitHub MCP: skipped (no token configured)")
-        except Exception as e:
-            print(f"✗ GitHub MCP: {e}")
-        
-        # Test Filesystem MCP
-        try:
-            result = await manager.filesystem.list_directory(str(project_root))
-            print("✓ Filesystem MCP: responsive")
-        except Exception as e:
-            print(f"✗ Filesystem MCP: {e}")
-        
-        # Test Search Provider (Brave or SearchX)
-        try:
-            if config.search_provider == "brave" and config.brave.api_key:
-                result = await manager.brave.brave_web_search(
-                    query="test",
-                    count=1
-                )
-                print("✓ Brave Search MCP: responsive")
-            elif config.search_provider == "searchx" and config.searchx.api_key:
-                result = await manager.searchx.searchx_web_search(
-                    query="test",
-                    count=1
-                )
-                print("✓ SearchX MCP: responsive")
-            else:
-                print(f"⊘ Search Provider MCP: skipped (no {config.search_provider} API key configured)")
-        except Exception as e:
-            print(f"✗ Search Provider MCP: {e}")
-        
-        # Test SpecAnalysisMCP
-        try:
-            result = await manager.spec_analysis.parse_spec_to_requirements(
-                spec_text="Add a simple login feature",
-                context="Test context"
-            )
-            print("✓ SpecAnalysisMCP: responsive")
-        except Exception as e:
-            print(f"✗ SpecAnalysisMCP: {e}")
-        
-        # Test CodeSearchMCP
-        try:
-            result = await manager.code_search.get_import_graph(str(project_root))
-            print("✓ CodeSearchMCP: responsive")
-        except Exception as e:
-            print(f"✗ CodeSearchMCP: {e}")
-    
-    print("\n=== All MCP servers shut down cleanly ===\n")
+    class MockLLM:
+        async def ainvoke(self, *args, **kwargs):
+            return MockResponse()
+
+        def invoke(self, *args, **kwargs):
+            return MockResponse()
+
+    # Patch _get_llm which is what the server actually calls
+    monkeypatch.setattr("specsync.mcp.servers.spec_analysis.server._get_llm", lambda: MockLLM())
+
+    # We also need to patch load_config because the server loads config internally
+    class MockConfig:
+        class LLM:
+            provider = "ollama"
+        llm = LLM()
+    monkeypatch.setattr("specsync.mcp.servers.spec_analysis.server.load_config", lambda: MockConfig())
+
+    result_json = await parse_spec_to_requirements("The system must have an endpoint.")
+
+    result = json.loads(result_json)
+    assert len(result) == 1
+    assert result[0]["id"] == "REQ-1"
+    assert result[0]["requirement_type"] == "api_change"
 
 
-if __name__ == "__main__":
-    asyncio.run(test_mcp_servers())
+@pytest.mark.asyncio
+async def test_code_search_semantic_search_mcp(monkeypatch):
+    # Mock the Chroma collection and embedding
+    class MockCollection:
+        def query(self, *args, **kwargs):
+            return {
+                "ids": [["test_py_0"]],
+                "distances": [[0.5]],
+                "documents": [["def test(): pass"]],
+                "metadatas": [[{
+                    "file_path": "test.py",
+                    "chunk_type": "function",
+                    "name": "test",
+                    "start_line": 1,
+                    "end_line": 2
+                }]]
+            }
+            
+    class MockEmbedder:
+        def encode(self, texts):
+            class Arr:
+                def tolist(self): return [0.1] * 384
+            return Arr()
+            
+    monkeypatch.setattr("specsync.mcp.servers.code_search.server._get_chroma_collection", lambda p: MockCollection())
+    monkeypatch.setattr("specsync.mcp.servers.code_search.server._get_embedding_model", lambda: MockEmbedder())
+    
+    result_json = await semantic_search("find test function", "/fake/path")
+    
+    result = json.loads(result_json)
+    assert len(result) == 1
+    assert result[0]["file_path"] == "test.py"
+    assert result[0]["name"] == "test"
+    # similarity is 1.0 - 0.5/2 = 0.75
+    assert result[0]["similarity_score"] == 0.75
