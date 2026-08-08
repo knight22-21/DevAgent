@@ -1,0 +1,143 @@
+"""MCP Manager — launches and manages all 5 MCP server processes."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import sys
+from contextlib import AsyncExitStack
+from pathlib import Path
+
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.shared.exceptions import McpError
+
+from devagent.core.config import DevAgentConfig
+from devagent.core.storage import get_config_path
+from devagent.mcp.client import MCPClient
+from devagent.mcp.clients.brave_client import BraveClient
+from devagent.mcp.clients.code_search_client import CodeSearchClient
+from devagent.mcp.clients.filesystem_client import FilesystemClient
+from devagent.mcp.clients.github_client import GitHubClient
+from devagent.mcp.clients.searchx_client import SearchXClient
+from devagent.mcp.clients.spec_analysis_client import SpecAnalysisClient
+
+
+class NodeNotFoundError(Exception):
+    """Raised when Node.js is not found in PATH."""
+    pass
+
+
+class MCPManager:
+    """Async context manager that launches and manages all MCP servers."""
+
+    def __init__(self, config: DevAgentConfig, project_root: Path):
+        self.config = config
+        self.project_root = project_root
+        self._exit_stack = AsyncExitStack()
+        
+        # Clients
+        self.github: GitHubClient | None = None
+        self.filesystem: FilesystemClient | None = None
+        self.brave: BraveClient | None = None
+        self.searchx: SearchXClient | None = None
+        self.spec_analysis: SpecAnalysisClient | None = None
+        self.code_search: CodeSearchClient | None = None
+
+    def _check_node(self) -> None:
+        """Verify Node.js is installed."""
+        try:
+            subprocess.run(["node", "--version"], check=True, capture_output=True, text=True, shell=True)
+            subprocess.run(["npx", "--version"], check=True, capture_output=True, text=True, shell=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            raise NodeNotFoundError(
+                "Node.js and npx are required for the official MCP servers. "
+                "Please download and install Node.js from https://nodejs.org/"
+            )
+
+    async def __aenter__(self) -> MCPManager:
+        self._check_node()
+        
+        env = os.environ.copy()
+        env["DEVAGENT_CONFIG_PATH"] = str(get_config_path())
+        
+        # 1. GitHub Server (Node.js)
+        if self.config.github.token:
+            gh_env = env.copy()
+            gh_env["GITHUB_PERSONAL_ACCESS_TOKEN"] = self.config.github.token
+            gh_params = StdioServerParameters(
+                command="npx" if sys.platform != "win32" else "npx.cmd",
+                args=["-y", "@modelcontextprotocol/server-github"],
+                env=gh_env
+            )
+            gh_transport = await self._exit_stack.enter_async_context(stdio_client(gh_params))
+            gh_session = await self._exit_stack.enter_async_context(ClientSession(*gh_transport))
+            await gh_session.initialize()
+            self.github = GitHubClient(MCPClient(gh_session, "GitHub"))
+            
+        # 2. Filesystem Server (Node.js)
+        fs_params = StdioServerParameters(
+            command="npx" if sys.platform != "win32" else "npx.cmd",
+            args=["-y", "@modelcontextprotocol/server-filesystem", str(self.project_root.resolve())],
+            env=env
+        )
+        fs_transport = await self._exit_stack.enter_async_context(stdio_client(fs_params))
+        fs_session = await self._exit_stack.enter_async_context(ClientSession(*fs_transport))
+        await fs_session.initialize()
+        self.filesystem = FilesystemClient(MCPClient(fs_session, "Filesystem"))
+        
+        # 3. Search Server (Brave or SearchX) (Node.js)
+        if self.config.search_provider == "brave" and self.config.brave.api_key:
+            b_env = env.copy()
+            b_env["BRAVE_API_KEY"] = self.config.brave.api_key
+            b_params = StdioServerParameters(
+                command="npx" if sys.platform != "win32" else "npx.cmd",
+                args=["-y", "@modelcontextprotocol/server-brave-search"],
+                env=b_env
+            )
+            b_transport = await self._exit_stack.enter_async_context(stdio_client(b_params))
+            b_session = await self._exit_stack.enter_async_context(ClientSession(*b_transport))
+            await b_session.initialize()
+            self.brave = BraveClient(MCPClient(b_session, "Brave"))
+        
+        elif self.config.search_provider == "searchx" and self.config.searchx.api_key:
+            # Use local SearchX MCP server (Python)
+            sx_env = env.copy()
+            sx_env["SEARCHX_API_KEY"] = self.config.searchx.api_key
+            sx_params = StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "devagent.mcp.servers.searchx.server"],
+                env=sx_env
+            )
+            sx_transport = await self._exit_stack.enter_async_context(stdio_client(sx_params))
+            sx_session = await self._exit_stack.enter_async_context(ClientSession(*sx_transport))
+            await sx_session.initialize()
+            self.searchx = SearchXClient(MCPClient(sx_session, "SearchX"))
+            
+        # 4. SpecAnalysis Server (Python)
+        sa_params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "devagent.mcp.servers.spec_analysis.server"],
+            env=env
+        )
+        sa_transport = await self._exit_stack.enter_async_context(stdio_client(sa_params))
+        sa_session = await self._exit_stack.enter_async_context(ClientSession(*sa_transport))
+        await sa_session.initialize()
+        self.spec_analysis = SpecAnalysisClient(MCPClient(sa_session, "SpecAnalysis"))
+        
+        # 5. CodeSearch Server (Python)
+        cs_params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "devagent.mcp.servers.code_search.server"],
+            env=env
+        )
+        cs_transport = await self._exit_stack.enter_async_context(stdio_client(cs_params))
+        cs_session = await self._exit_stack.enter_async_context(ClientSession(*cs_transport))
+        await cs_session.initialize()
+        self.code_search = CodeSearchClient(MCPClient(cs_session, "CodeSearch"))
+        
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self._exit_stack.aclose()
