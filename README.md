@@ -1,37 +1,67 @@
-# SpecSync
+<div align="center">
+  <h1>🚀 DevAgent</h1>
+  <p><b>AI development agent for specification-to-code implementation.</b></p>
 
-**Requirements-to-code gap analysis for developers.**
+  <a href="https://pypi.org/project/devagent/"><img src="https://img.shields.io/pypi/v/devagent.svg" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/devagent/"><img src="https://img.shields.io/pypi/pyversions/devagent.svg" alt="Python Versions"></a>
+  <a href="https://github.com/yourusername/DevAgent/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/devagent.svg" alt="License"></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/Powered%20by-MCP-blue.svg" alt="MCP"></a>
 
-SpecSync is a local, terminal-based CLI tool that bridges the gap between your project specifications (GitHub issues, Markdown specs, or plain text) and your actual codebase. Powered by local LLMs (via Ollama) and the Model Context Protocol (MCP), SpecSync parses your requirements, semantically searches your codebase, and generates a comprehensive gap report detailing what exists, what needs extending, and what is completely missing.
+  <p>
+    DevAgent bridges the gap between your project specifications (GitHub Issues, Markdown specs, or plain text) and your actual codebase. It leverages local LLMs and the <a href="https://modelcontextprotocol.io/">Model Context Protocol (MCP)</a> to automate impact analysis, highlighting exactly what exists, what needs extending, and what is missing.
+  </p>
+</div>
 
 ---
 
-## 🌟 Features
+## ✨ Features
 
-- **Automated Gap Analysis**: Compares a spec against your existing codebase and categorizes requirements into:
+- 🧠 **Automated Gap Analysis**: Automatically compares new specs against your existing codebase and categorizes requirements:
   - ✅ **Reuse**: Code already exists.
   - ⚠️ **Extend**: Code exists but needs modification.
   - ❌ **Conflict**: Requirement contradicts existing logic.
   - 🔨 **Net New**: Entirely new implementation required.
-- **Local & Private**: Fully supports running locally via Ollama and local ChromaDB embeddings. Your code never has to leave your machine.
-- **Model Context Protocol (MCP)**: Leverages official MCP servers to safely read your filesystem and fetch GitHub issues, alongside custom Python MCP servers for AST parsing and semantic search.
-- **Effort Estimation & Planning**: Uses heuristic baselines and LLM reasoning to estimate implementation hours and suggest an optimal implementation order.
-- **Beautiful Output**: Renders beautiful Rich terminal UI interfaces and persists detailed Markdown reports.
+- 🔒 **Local & Private**: Fully supports running locally via Ollama and local ChromaDB embeddings. Your code never has to leave your machine.
+- 🔌 **Model Context Protocol (MCP)**: Leverages official MCP servers to safely read your filesystem and fetch GitHub issues, alongside custom Python MCP servers for AST parsing and semantic RAG.
+- ⏱️ **Effort Estimation & Planning**: Uses heuristic baselines and LLM reasoning to estimate implementation hours and suggest an optimal implementation order.
+- 🎨 **Beautiful Output**: Renders beautiful Rich terminal UI interfaces and persists detailed Markdown reports for your team.
+
+---
+
+## 🛠️ Architecture
+
+DevAgent uses a multi-agent LangGraph pipeline orchestrated via MCP:
+
+```mermaid
+graph TD
+    Spec[Spec Source: GitHub, Markdown, Text] --> Parser[SpecParser Agent]
+    Parser --> Context[Web Context via Brave/SearchX]
+    Parser --> Reqs[Extracted Atomic Requirements]
+    Reqs --> Inventory[CodeInventory Agent]
+    Inventory <--> Chroma[(ChromaDB Vector Store)]
+    Inventory --> Gap[Requirement Classifications]
+    Gap --> Reporter[GapReport Agent]
+    Reporter --> UI[Rich Terminal UI & Markdown Report]
+    
+    style Parser fill:#f9f,stroke:#333,stroke-width:2px
+    style Inventory fill:#bbf,stroke:#333,stroke-width:2px
+    style Reporter fill:#dfd,stroke:#333,stroke-width:2px
+```
 
 ---
 
 ## 🚀 Installation
 
-SpecSync is a Python CLI tool. The recommended way to install it is via `pipx` to keep its dependencies isolated:
+DevAgent is a Python CLI tool. The recommended way to install it is via `pipx` to keep its dependencies isolated:
 
 ```bash
-pipx install specsync
+pipx install devagent
 ```
 
-*(Alternatively, you can install it globally or in a virtual environment using `pip install specsync`)*.
+*(Alternatively, you can install it globally or in a virtual environment using `pip install devagent`)*.
 
 ### ⚠️ System Requirements
-Because SpecSync utilizes official Model Context Protocol (MCP) servers under the hood, you **must have Node.js installed** on your machine.
+Because DevAgent utilizes official Model Context Protocol (MCP) servers under the hood, you **must have Node.js installed** on your machine.
 - [Download and install Node.js](https://nodejs.org/) (Ensure `npx` is available in your PATH).
 
 ---
@@ -41,40 +71,40 @@ Because SpecSync utilizes official Model Context Protocol (MCP) servers under th
 Before analyzing your first project, initialize the global configuration:
 
 ```bash
-specsync init
+devagent init
 ```
 This interactive prompt will help you set up:
 - **LLM Provider**: Choose between Ollama (local), Groq, Anthropic, OpenAI, or Gemini.
-- **GitHub Token**: (Optional) Required if you want SpecSync to fetch specs directly from GitHub Issues.
+- **GitHub Token**: (Optional) Required if you want DevAgent to fetch specs directly from GitHub Issues.
 - **Search Provider**: (Optional) Brave or SearchX for gathering web context on implementation patterns.
 
-*You can always view or modify your config later using `specsync config --show` or `specsync config --set key=value`.*
+*You can always view or modify your config later using `devagent config --show` or `devagent config --set key=value`.*
 
 ---
 
-## 🛠️ Usage
+## 💻 Usage
 
 ### 1. Index your Codebase
 Navigate to your project directory and build the semantic search index. This uses local AST parsing (for Python) and text chunking to embed your codebase into a local ChromaDB instance.
 
 ```bash
 cd /path/to/your/project
-specsync index
+devagent index
 ```
-*Note: SpecSync respects your `.gitignore` files automatically. Re-running this command performs an incremental index (only updating changed files).*
+*Note: DevAgent respects your `.gitignore` files automatically. Re-running this command performs an incremental index (only updating changed files).*
 
 ### 2. Analyze a Specification
 Run a gap analysis against your codebase using a GitHub Issue, a local Markdown file, or inline text:
 
 ```bash
 # Analyze a GitHub Issue (requires GitHub Token in config)
-specsync analyze --issue 142 --repo owner/my-repo
+devagent analyze --issue 142 --repo owner/my-repo
 
 # Analyze a local spec file
-specsync analyze --spec ./docs/new_feature.md
+devagent analyze --spec ./docs/new_feature.md
 
 # Analyze inline text
-specsync analyze --text "Add a new user authentication endpoint supporting OAuth2."
+devagent analyze --text "Add a new user authentication endpoint supporting OAuth2."
 ```
 
 By default, this outputs a beautiful Rich terminal report **and** saves a `.md` markdown report in your local app data directory.
@@ -84,17 +114,17 @@ View previously generated reports for the current project:
 
 ```bash
 # List all saved reports
-specsync reports
+devagent reports
 
 # View a specific report in the terminal
-specsync reports --show issue-142
+devagent reports --show issue-142
 ```
 
 ### 4. Semantic Search
 Need to quickly find where something is implemented? Use the standalone semantic search:
 
 ```bash
-specsync search "user authentication logic"
+devagent search "user authentication logic"
 ```
 
 ---
@@ -104,8 +134,13 @@ specsync search "user authentication logic"
 If you run into issues with dependencies or services, run the built-in doctor command to check the health of your environment:
 
 ```bash
-specsync doctor
+devagent doctor
 ```
 
+## 🤝 Contributing
+
+Contributions are welcome! Please check out the issues page or submit a pull request.
+
 ## 📝 License
-MIT License.
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
