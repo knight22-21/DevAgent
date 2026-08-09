@@ -82,24 +82,50 @@ This interactive prompt will help you set up:
 
 ---
 
-## 💻 Usage
+## 💻 Usage Guide: Analyzing a GitHub Issue
 
-### 1. Index your Codebase
-Navigate to your project directory and build the semantic search index. This uses local AST parsing (for Python) and text chunking to embed your codebase into a local ChromaDB instance.
+The most powerful way to use DevAgent is to point it directly at a GitHub Issue. It will fetch the issue description, analyze your local codebase, and tell you exactly what you need to do to implement it.
+
+### Step 1: Add your GitHub Token
+First, ensure you have set your GitHub Personal Access Token in your configuration so DevAgent can read from the GitHub API.
+
+```bash
+# You can set it interactively via 'devagent init' or directly:
+devagent config --set github.token=ghp_your_token_here
+
+# Optionally, set a default repository to save typing later
+devagent config --set github.default_repo=octocat/Hello-World
+```
+
+### Step 2: Index your Local Codebase
+Navigate to the root directory of the codebase on your machine and build the semantic search index. This maps your code into a local vector database.
 
 ```bash
 cd /path/to/your/project
 devagent index
 ```
-*Note: DevAgent respects your `.gitignore` files automatically. Re-running this command performs an incremental index (only updating changed files).*
+*Note: DevAgent automatically respects your `.gitignore` files. You can run this command anytime your code changes to perform a fast incremental update.*
 
-### 2. Analyze a Specification
-Run a gap analysis against your codebase using a GitHub Issue, a local Markdown file, or inline text:
+### Step 3: Run the Analysis
+Pass the GitHub Issue number to the `analyze` command. DevAgent will download the issue, extract the requirements, cross-reference them with your code, and generate a gap report.
 
 ```bash
-# Analyze a GitHub Issue (requires GitHub Token in config)
-devagent analyze --issue 142 --repo owner/my-repo
+# If you set a default_repo in config:
+devagent analyze --issue 42
 
+# Or specify the repo directly:
+devagent analyze --issue 42 --repo octocat/Hello-World
+```
+
+DevAgent will output a detailed, color-coded report to your terminal and save a Markdown copy (e.g., `issue-42-2026-08-09-153000.md`) in your local reports folder.
+
+---
+
+## 📝 Other Usage Modes
+
+DevAgent can also analyze local files or raw text:
+
+```bash
 # Analyze a local spec file
 devagent analyze --spec ./docs/new_feature.md
 
@@ -107,9 +133,7 @@ devagent analyze --spec ./docs/new_feature.md
 devagent analyze --text "Add a new user authentication endpoint supporting OAuth2."
 ```
 
-By default, this outputs a beautiful Rich terminal report **and** saves a `.md` markdown report in your local app data directory.
-
-### 3. Manage Reports
+### Manage Reports
 View previously generated reports for the current project:
 
 ```bash
@@ -117,10 +141,10 @@ View previously generated reports for the current project:
 devagent reports
 
 # View a specific report in the terminal
-devagent reports --show issue-142
+devagent reports --show issue-42
 ```
 
-### 4. Semantic Search
+### Semantic Search
 Need to quickly find where something is implemented? Use the standalone semantic search:
 
 ```bash
