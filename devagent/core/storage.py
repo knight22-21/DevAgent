@@ -20,11 +20,13 @@ def get_config_path() -> Path:
     """Return the path to the config file.
 
     On Windows: %APPDATA%\\devagent\\config.toml
-    Can be overridden via DEVAGENT_CONFIG_PATH environment variable.
+    Can be overridden via DEVAGENT_CONFIG_PATH or SPECSYNC_CONFIG_PATH environment variable.
     """
-    # Check for environment variable override first
+    # Check for environment variable override first (support both for backward compatibility)
     if "DEVAGENT_CONFIG_PATH" in os.environ:
         return Path(os.environ["DEVAGENT_CONFIG_PATH"])
+    if "SPECSYNC_CONFIG_PATH" in os.environ:
+        return Path(os.environ["SPECSYNC_CONFIG_PATH"])
     config_dir = Path(platformdirs.user_config_dir(APP_NAME))
     return config_dir / "config.toml"
 

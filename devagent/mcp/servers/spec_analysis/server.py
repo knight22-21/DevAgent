@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from devagent.core.config import load_config
 from devagent.core.llm import get_llm_with_fallback

@@ -19,6 +19,14 @@ class GitHubClient:
         })
         return json.loads(result)
 
+    async def get_pull_request(self, owner: str, repo: str, pr_number: int) -> dict:
+        """Fetches PR title, body, and changed files for spec analysis."""
+        result = await self._client.call_tool(
+            "get_pull_request",
+            {"owner": owner, "repo": repo, "pull_number": pr_number}
+        )
+        return json.loads(result)
+
     async def get_file_contents(self, owner: str, repo: str, path: str, branch: str | None = None) -> str:
         args = {"owner": owner, "repo": repo, "path": path}
         if branch:
