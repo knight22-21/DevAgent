@@ -2,7 +2,7 @@ import os
 import pytest
 from pathlib import Path
 
-from specsync.core.storage import (
+from devagent.core.storage import (
     get_project_hash,
     ensure_dirs,
     get_project_dir,

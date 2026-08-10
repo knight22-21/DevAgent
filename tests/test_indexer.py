@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from specsync.mcp.servers.code_search.indexer import (
+from devagent.mcp.servers.code_search.indexer import (
     chunk_python_file,
     chunk_generic_file,
     get_gitignore_spec,

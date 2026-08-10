@@ -1,17 +1,17 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from specsync.agents.state import PipelineState
-from specsync.core.config import SpecSyncConfig
-from specsync.core.models import Requirement, RequirementType
+from devagent.agents.state import PipelineState
+from devagent.core.config import DevAgentConfig
+from devagent.core.models import Requirement, RequirementType
 
-from specsync.agents.spec_parser import SpecParserAgent
-from specsync.agents.code_inventory import CodeInventoryAgent
-from specsync.agents.gap_report import GapReportAgent
+from devagent.agents.spec_parser import SpecParserAgent
+from devagent.agents.code_inventory import CodeInventoryAgent
+from devagent.agents.gap_report import GapReportAgent
 
 @pytest.fixture
 def mock_config():
-    config = SpecSyncConfig()
-    config.search_provider = "none"
+    config = DevAgentConfig()
+    config.search_provider = "searchx"
     return config
 
 @pytest.fixture
@@ -73,8 +73,8 @@ async def test_code_inventory_agent(mock_config, mock_mcp_manager, monkeypatch):
         def with_structured_output(self, *args, **kwargs):
             class MockStructured:
                 async def ainvoke(self, *a, **k):
-                    from specsync.agents.code_inventory import RequirementClassification
-                    from specsync.core.models import RequirementStatus
+                    from devagent.agents.code_inventory import RequirementClassification
+                    from devagent.core.models import RequirementStatus
                     return RequirementClassification(
                         status=RequirementStatus.MISSING,
                         matched_files=[],
@@ -85,7 +85,7 @@ async def test_code_inventory_agent(mock_config, mock_mcp_manager, monkeypatch):
                     )
             return MockStructured()
             
-    monkeypatch.setattr("specsync.agents.code_inventory.get_llm_with_fallback", lambda config: MockLLM())
+    monkeypatch.setattr("devagent.agents.code_inventory.get_llm_with_fallback", lambda config: MockLLM())
     
     agent = CodeInventoryAgent(mock_config, mock_mcp_manager, "/test/path")
     
@@ -124,7 +124,7 @@ async def test_gap_report_agent(mock_config, monkeypatch):
             class MockStructured:
                 async def ainvoke(self, *a, **k):
                     if schema.__name__ == "AdjustedEstimate":
-                        from specsync.agents.gap_report import AdjustedEstimate
+                        from devagent.agents.gap_report import AdjustedEstimate
                         return AdjustedEstimate(
                             conflict_resolution_hours=0.0,
                             extension_hours=0.0,
@@ -134,15 +134,15 @@ async def test_gap_report_agent(mock_config, monkeypatch):
                             notes="Test notes"
                         )
                     else:
-                        from specsync.agents.gap_report import ImplementationOrder
+                        from devagent.agents.gap_report import ImplementationOrder
                         return ImplementationOrder(order=["REQ-1"])
             return MockStructured()
             
-    monkeypatch.setattr("specsync.agents.gap_report.get_llm_with_fallback", lambda config: MockLLM())
+    monkeypatch.setattr("devagent.agents.gap_report.get_llm_with_fallback", lambda config: MockLLM())
     
     agent = GapReportAgent(mock_config)
     
-    from specsync.core.models import RequirementAnalysis, RequirementStatus
+    from devagent.core.models import RequirementAnalysis, RequirementStatus
     req = Requirement(
         id="REQ-1",
         description="Test desc",

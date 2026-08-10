@@ -1,15 +1,15 @@
 import os
 from pathlib import Path
 
-from specsync.core.config import (
-    SpecSyncConfig,
+from devagent.core.config import (
+    DevAgentConfig,
     load_config,
     save_config,
     config_exists,
 )
 
 def test_config_defaults():
-    config = SpecSyncConfig()
+    config = DevAgentConfig()
     assert config.llm.provider == "ollama"
     assert config.llm.model == "qwen2.5-coder:7b"
     assert config.llm.base_url == "http://localhost:11434"
@@ -20,7 +20,7 @@ def test_config_reads_writes_correctly(mock_config_path: Path, monkeypatch):
     # Ensure the mocked path is used
     monkeypatch.setenv("SPECSYNC_CONFIG_PATH", str(mock_config_path))
     
-    config = SpecSyncConfig()
+    config = DevAgentConfig()
     config.github.token = "test_token_123"
     config.llm.provider = "openai"
     config.llm.model = "gpt-4o"
@@ -45,7 +45,7 @@ def test_config_path_resolution(monkeypatch, tmp_path):
     # If SPECSYNC_CONFIG_PATH is set
     env_path = tmp_path / "custom_config.toml"
     monkeypatch.setenv("SPECSYNC_CONFIG_PATH", str(env_path))
-    from specsync.core.storage import get_config_path
+    from devagent.core.storage import get_config_path
 
     assert get_config_path() == env_path
 
@@ -53,4 +53,4 @@ def test_config_path_resolution(monkeypatch, tmp_path):
     monkeypatch.delenv("SPECSYNC_CONFIG_PATH", raising=False)
     default_path = get_config_path()
     assert default_path.name == "config.toml"
-    assert "specsync" in str(default_path).lower()
+    assert "devagent" in str(default_path).lower()
