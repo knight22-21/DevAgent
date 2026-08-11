@@ -8,21 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-08-11
 
 ### Added
-- New feature additions for specification-to-code implementation
-- Enhanced test coverage and test fixes
-- Improved model consistency with updated enum values (RequirementStatus, RequirementType)
-- Updated MCP server integration with FastMCP
-- Enhanced configuration path resolution with backward compatibility
+- Direct GitHub issue and pull request URL input for `devagent analyze` via `--url`
+- Interactive terminal chat sessions for exploring a generated gap analysis
+- Compact chat-focused report rendering and conversation history support
+- Test coverage for GitHub URL parsing and chat prompt grounding
 
 ### Changed
-- Updated from `specsync` to `devagent` package naming throughout codebase
-- Renamed `SpecSyncConfig` to `DevAgentConfig` for consistency
-- Updated dependency versions for better compatibility
+- `devagent analyze` can now open a chat session immediately with `--chat`
+- Pull request URLs are analyzed as specifications using PR title and description
+- Spec analysis MCP server integration now uses `FastMCP`
 
 ### Fixed
-- Fixed test imports and module references
-- Fixed configuration path resolution to support legacy environment variables
-- Fixed enum value inconsistencies in test assertions
+- Configuration path resolution now supports the legacy `SPECSYNC_CONFIG_PATH` override
+- Test imports and assertions were aligned with the `devagent` package naming
 
 ## [0.1.1] - 2026-08-10
 
