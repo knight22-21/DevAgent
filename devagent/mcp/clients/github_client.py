@@ -49,3 +49,33 @@ class GitHubClient:
             "path": path
         })
         return json.loads(result)
+
+    async def list_issues(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "open",
+        since: "datetime | None" = None,
+        labels: "list[str] | None" = None,
+    ) -> list[dict]:
+        """Lists issues for a repo. Returns list of issue dicts.
+
+        Each dict has: number, title, body, url, labels, state, created_at, updated_at
+        """
+        from datetime import datetime
+        args: dict = {"owner": owner, "repo": repo, "state": state}
+        if since:
+            args["since"] = since.isoformat()
+        if labels:
+            args["labels"] = ",".join(labels)
+
+        result = await self._client.call_tool("list_issues", args)
+        if isinstance(result, list):
+            return result
+        # Some MCP server versions return a JSON string
+        try:
+            parsed = json.loads(result)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+

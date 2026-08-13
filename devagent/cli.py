@@ -1129,7 +1129,254 @@ def chat(
 
 
 @app.command()
+def watch(
+    repo: Optional[str] = typer.Option(None, "--repo", "-r", help="GitHub repo as owner/repo"),
+    status: bool = typer.Option(False, "--status", help="Run a check right now and show results"),
+    start: bool = typer.Option(False, "--start", help="Start background scheduler (foreground process)"),
+    stop: bool = typer.Option(False, "--stop", help="Stop watching a repo"),
+    list_repos: bool = typer.Option(False, "--list", help="List all watched repos"),
+    report: bool = typer.Option(False, "--report", help="Show all analysed issues for a repo"),
+    show: Optional[int] = typer.Option(None, "--show", help="Show full analysis for a specific issue number"),
+    interval: str = typer.Option("30m", "--interval", help="Check interval: 30m, 1h, 6h, 12h, 24h"),
+    labels: Optional[str] = typer.Option(None, "--labels", help="Comma-separated label filters e.g. 'feature,enhancement'"),
+) -> None:
+    """Monitor a GitHub repo for new issues and detect cross-issue conflicts."""
+    import asyncio
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    from devagent.core.project import detect_project_root
+    project_root, _ = detect_project_root()
+
+    interval_minutes = _parse_interval(interval)
+
+    if list_repos:
+        asyncio.run(_watch_list())
+        return
+
+    if stop:
+        if not repo:
+            console.print("[red]Specify --repo owner/repo to stop watching.[/red]")
+            raise typer.Exit(1)
+        asyncio.run(_watch_stop(repo))
+        return
+
+    if show is not None:
+        owner, repo_name = _parse_repo_or_infer(repo, project_root)
+        asyncio.run(_watch_show(owner, repo_name, show, cfg, project_root))
+        return
+
+    if report:
+        owner, repo_name = _parse_repo_or_infer(repo, project_root)
+        asyncio.run(_watch_report(owner, repo_name))
+        return
+
+    if status:
+        owner, repo_name = _parse_repo_or_infer(repo, project_root)
+        asyncio.run(_watch_run_once(owner, repo_name, cfg, project_root))
+        return
+
+    if start:
+        asyncio.run(_watch_start(cfg, project_root, interval_minutes))
+        return
+
+    if repo:
+        label_list = [lbl.strip() for lbl in labels.split(",")] if labels else []
+        asyncio.run(_watch_register(repo, interval_minutes, label_list))
+        return
+
+    # No flags — show usage hint
+    console.print(
+        "[dim]Usage: devagent watch --repo owner/repo    (to start watching)\n"
+        "       devagent watch --status              (to check now)\n"
+        "       devagent watch --list                (to list watched repos)\n"
+        "       devagent watch --help                (for all options)[/dim]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Watch command helpers
+# ---------------------------------------------------------------------------
+
+def _parse_interval(interval_str: str) -> int:
+    """Converts interval string to minutes. Supports: 30m, 1h, 6h, 12h, 24h."""
+    s = interval_str.strip().lower()
+    if s.endswith("m"):
+        return int(s[:-1])
+    elif s.endswith("h"):
+        return int(s[:-1]) * 60
+    else:
+        return int(s)
+
+
+def _split_repo_string(repo_str: str) -> tuple[str, str]:
+    """Splits 'owner/repo' into ('owner', 'repo')."""
+    parts = repo_str.strip().split("/")
+    if len(parts) != 2:
+        console.print(f"[red]Invalid repo format: '{repo_str}'. Use 'owner/repo'.[/red]")
+        raise typer.Exit(1)
+    return parts[0], parts[1]
+
+
+def _parse_repo_or_infer(repo: Optional[str], project_root) -> tuple[str, str]:
+    """Returns (owner, repo_name). If repo not given, infers from git remote."""
+    if repo:
+        return _split_repo_string(repo)
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+        remote_url = result.stdout.strip()
+        if "github.com" in remote_url:
+            from devagent.core.url_parser import parse_github_url
+            if remote_url.startswith("git@"):
+                remote_url = remote_url.replace("git@github.com:", "https://github.com/")
+            if remote_url.endswith(".git"):
+                remote_url = remote_url[:-4]
+            parsed = parse_github_url(remote_url + "/issues/1")
+            return parsed.owner, parsed.repo
+    except Exception:
+        pass
+
+    console.print(
+        "[red]Could not infer GitHub repo from git remote. "
+        "Use --repo owner/repo explicitly.[/red]"
+    )
+    raise typer.Exit(1)
+
+
+async def _watch_register(repo_str: str, interval_minutes: int, labels: list[str]) -> None:
+    from devagent.watcher.storage import init_watcher_db, register_repo
+    owner, repo_name = _split_repo_string(repo_str)
+    await init_watcher_db()
+    await register_repo(owner, repo_name, interval_minutes, labels)
+    console.print(
+        f"[green]✓[/green] Now watching [bold]{owner}/{repo_name}[/bold]  "
+        f"·  checking every {interval_minutes} minutes"
+    )
+    console.print("[dim]Run 'devagent watch --status' to run the first check now.[/dim]")
+
+
+async def _watch_run_once(owner: str, repo: str, cfg, project_root) -> None:
+    from devagent.watcher.storage import init_watcher_db, get_watched_repo
+    from devagent.watcher.scheduler import WatcherScheduler
+    await init_watcher_db()
+    watched_repo = await get_watched_repo(owner, repo)
+    if not watched_repo:
+        console.print(f"[red]{owner}/{repo} is not being watched.[/red]")
+        console.print(f"[dim]Run 'devagent watch --repo {owner}/{repo}' to register it.[/dim]")
+        return
+    scheduler = WatcherScheduler(cfg, project_root, watched_repo.check_interval_minutes)
+    await scheduler.run_once()
+
+
+async def _watch_start(cfg, project_root, interval_minutes: int) -> None:
+    from devagent.watcher.storage import init_watcher_db
+    from devagent.watcher.scheduler import WatcherScheduler
+    await init_watcher_db()
+    scheduler = WatcherScheduler(cfg, project_root, interval_minutes)
+    await scheduler.start()
+
+
+async def _watch_list() -> None:
+    from devagent.watcher.storage import init_watcher_db, list_watched_repos
+    from devagent.output.watcher_renderer import render_watched_repos
+    await init_watcher_db()
+    repos = await list_watched_repos()
+    render_watched_repos(repos)
+
+
+async def _watch_stop(repo_str: str) -> None:
+    from devagent.watcher.storage import init_watcher_db, deactivate_repo
+    owner, repo_name = _split_repo_string(repo_str)
+    await init_watcher_db()
+    await deactivate_repo(owner, repo_name)
+    console.print(f"[green]✓[/green] Stopped watching [bold]{owner}/{repo_name}[/bold]")
+    console.print("[dim]Historical analysis data is preserved.[/dim]")
+
+
+async def _watch_report(owner: str, repo: str) -> None:
+    from devagent.watcher.storage import init_watcher_db, get_all_analyses_for_repo
+    from devagent.output.watcher_renderer import render_all_analyses
+    await init_watcher_db()
+    analyses = await get_all_analyses_for_repo(owner, repo)
+    render_all_analyses(analyses, owner, repo)
+
+
+async def _watch_show(owner: str, repo: str, issue_number: int, cfg, project_root) -> None:
+    from devagent.watcher.storage import (
+        init_watcher_db, get_analysis, mark_full_report_available
+    )
+    from devagent.core.storage import get_watcher_reports_dir
+    from devagent.mcp.manager import MCPManager
+
+    await init_watcher_db()
+    analysis = await get_analysis(owner, repo, issue_number)
+    if not analysis:
+        console.print(f"[red]Issue #{issue_number} has not been analysed by the watcher yet.[/red]")
+        console.print("[dim]Run 'devagent watch --status' to check for new issues first.[/dim]")
+        return
+
+    reports_dir = get_watcher_reports_dir(owner, repo)
+    report_json = reports_dir / f"issue-{issue_number}-watcher.json"
+
+    if report_json.exists() and analysis.full_report_available:
+        from devagent.core.models import GapReport
+        from devagent.output.terminal import render_gap_report
+        gap_report = GapReport.model_validate_json(report_json.read_text())
+        render_gap_report(gap_report, f"{owner}/{repo}", report_json)
+    else:
+        console.print(
+            f"[dim]Generating full analysis for #{issue_number}... "
+            f"(this may take 30-60 seconds)[/dim]"
+        )
+        import asyncio as _asyncio
+        from devagent.agents.pipeline import run_pipeline
+
+        async def _run():
+            async with MCPManager(cfg, project_root) as mcp:
+                return await run_pipeline(
+                    cfg, mcp,
+                    spec_text=f"{analysis.issue_title}\n\n(Re-running from watcher analysis)",
+                    spec_source=f"https://github.com/{owner}/{repo}/issues/{issue_number}",
+                    project_root=str(project_root),
+                )
+
+        try:
+            gap_report = _asyncio.run(_run())
+        except typer.Exit:
+            raise
+        except Exception as exc:
+            _handle_error(exc)
+            return
+
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_json.write_text(gap_report.model_dump_json())
+        await mark_full_report_available(owner, repo, issue_number)
+
+        from devagent.output.terminal import render_gap_report
+        from devagent.output.markdown import generate_markdown_report
+        render_gap_report(gap_report, f"{owner}/{repo}", report_json)
+        generate_markdown_report(gap_report, project_root, f"{owner}/{repo}")
+
+    console.print()
+    console.print(
+        f"[dim]To discuss this analysis: "
+        f"devagent chat --report issue-{issue_number}-watcher[/dim]"
+    )
+
+
+@app.command()
 def doctor() -> None:
+
     """Check that all dependencies and services are working."""
     console.print()
     console.print(

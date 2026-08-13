@@ -226,3 +226,24 @@ def clear_project_index(project_root: Path) -> None:
         shutil.rmtree(chroma_dir)
     if sqlite_path.exists():
         sqlite_path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# F3 — Watcher path helpers
+# ---------------------------------------------------------------------------
+
+def get_watcher_db_path() -> Path:
+    """Returns path to the watcher SQLite database.
+
+    data_dir/watcher/watcher.db
+    """
+    return get_data_dir() / "watcher" / "watcher.db"
+
+
+def get_watcher_reports_dir(owner: str, repo: str) -> Path:
+    """Returns path to watcher reports for a specific repo.
+
+    data_dir/watcher/reports/{owner}-{repo}
+    """
+    return get_data_dir() / "watcher" / "reports" / f"{owner}-{repo}"
+

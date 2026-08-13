@@ -54,6 +54,15 @@ class OutputConfig(BaseModel):
     verbosity: Literal["quiet", "normal", "verbose"] = "normal"
 
 
+class WatcherConfig(BaseModel):
+    """Repo Health Monitor configuration."""
+    default_interval_minutes: int = 30
+    max_issues_per_check: int = 20
+    default_labels: list[str] = []
+    notify_on_cross_conflict: bool = True
+    skip_closed_issues: bool = True
+
+
 class DevAgentConfig(BaseModel):
     """Root configuration model for DevAgent."""
     llm: LLMConfig = LLMConfig()
@@ -62,6 +71,7 @@ class DevAgentConfig(BaseModel):
     searchx: SearchXConfig = SearchXConfig()
     search_provider: Literal["brave", "searchx"] = "searchx"
     output: OutputConfig = OutputConfig()
+    watcher: WatcherConfig = WatcherConfig()
 
 
 def config_exists() -> bool:

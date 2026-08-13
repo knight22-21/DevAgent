@@ -44,6 +44,7 @@ dependencies = [
     "httpx>=0.27.0",
     "tenacity>=9.0.0",
     "pydantic>=2.8.0",
+    "apscheduler>=3.10.0",
 ]
 
 [project.urls]
@@ -67,3 +68,6 @@ target-version = "py312"
 
 [tool.hatch.build.targets.wheel]
 packages = ["devagent"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
