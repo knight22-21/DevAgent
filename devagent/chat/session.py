@@ -66,13 +66,8 @@ class ChatSession:
 
     async def _get_llm_response(self) -> str:
         """Calls the LLM with the full conversation history."""
-        messages = self.history.to_langchain_messages()
-        loop = asyncio.get_event_loop()
-        # Run LLM call in executor to avoid blocking
-        response = await loop.run_in_executor(
-            None,
-            lambda: self.llm.invoke(messages)
-        )
+        messages = self.history.to_messages()
+        response = await self.llm.acomplete(messages)
         return response.content
 
     def _handle_special_command(self, command: str) -> str | bool:

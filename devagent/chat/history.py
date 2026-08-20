@@ -21,15 +21,12 @@ class ConversationHistory:
     def add_assistant_message(self, content: str) -> None:
         self.messages.append(Message(role="assistant", content=content))
 
-    def to_langchain_messages(self) -> list:
-        """Returns messages in LangChain format for LLM invocation."""
-        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-        result = [SystemMessage(content=self.system_prompt)]
+    def to_messages(self) -> list:
+        """Returns messages as list of llm.Message for LLMClient.complete()."""
+        from devagent.core.llm import Message as LLMMessage
+        result = [LLMMessage(role="system", content=self.system_prompt)]
         for msg in self.messages:
-            if msg.role == "user":
-                result.append(HumanMessage(content=msg.content))
-            else:
-                result.append(AIMessage(content=msg.content))
+            result.append(LLMMessage(role=msg.role, content=msg.content))
         return result
 
     def _trim_if_needed(self) -> None:
