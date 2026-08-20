@@ -1,4 +1,4 @@
-"""DevAgent CLI - all command definitions using Typer + Rich."""
+﻿"""DevAgent CLI - all command definitions using Typer + Rich."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from devagent.core.url_parser import parse_github_url, format_repo_string, Inval
 
 app = typer.Typer(
     name="devagent",
-    help="DevAgent — AI development agent for specification-to-code implementation.",
+    help="DevAgent â€” AI development agent for specification-to-code implementation.",
     add_completion=False,
     rich_markup_mode="rich",
 )
@@ -78,13 +78,13 @@ def _handle_error(exc: Exception) -> None:
 
     body = f"[red bold]{error_msg}[/red bold]"
     if hint:
-        body += f"\n\n[yellow]💡 {hint}[/yellow]"
+        body += f"\n\n[yellow]ðŸ’¡ {hint}[/yellow]"
 
     if _verbose:
         body += f"\n\n[dim]{traceback.format_exc()}[/dim]"
 
     console.print(
-        Panel(body, title="❌ Error", border_style="red")
+        Panel(body, title="âŒ Error", border_style="red")
     )
     raise typer.Exit(1)
 
@@ -220,14 +220,14 @@ def _check_command(cmd: list[str]) -> tuple[bool, str]:
 
 @app.command()
 def init() -> None:
-    """Interactive first-time setup — configure LLM provider, API keys, and preferences."""
+    """Interactive first-time setup â€” configure LLM provider, API keys, and preferences."""
     console.print()
     console.print(
         Panel(
             "[bold cyan]Welcome to DevAgent![/bold cyan]\n\n"
             "This wizard will configure your LLM provider, API keys, and preferences.\n"
             "All settings are stored in your user config directory.",
-            title="⚡ DevAgent Setup",
+            title="âš¡ DevAgent Setup",
             border_style="cyan",
         )
     )
@@ -380,9 +380,9 @@ def init() -> None:
             msg = "API key provided" if ok else "No API key provided"
 
     if ok:
-        console.print(f"  ✅ LLM provider: {msg}")
+        console.print(f"  âœ… LLM provider: {msg}")
     else:
-        console.print(f"  ❌ LLM provider: {msg}")
+        console.print(f"  âŒ LLM provider: {msg}")
         if not Confirm.ask("Continue anyway?", default=False):
             raise typer.Exit(1)
 
@@ -391,29 +391,29 @@ def init() -> None:
         with console.status("[cyan]Validating Brave Search...[/cyan]"):
             ok, msg = _validate_brave_key(brave_key)
         if ok:
-            console.print(f"  ✅ Brave Search: {msg}")
+            console.print(f"  âœ… Brave Search: {msg}")
         else:
-            console.print(f"  ❌ Brave Search: {msg}")
+            console.print(f"  âŒ Brave Search: {msg}")
     elif search_provider == "searchx" and searchx_key:
         with console.status("[cyan]Validating SearchX...[/cyan]"):
             ok, msg = _validate_searchx_key(searchx_key)
         if ok:
-            console.print(f"  ✅ SearchX: {msg}")
+            console.print(f"  âœ… SearchX: {msg}")
         else:
-            console.print(f"  ❌ SearchX: {msg}")
+            console.print(f"  âŒ SearchX: {msg}")
     else:
-        console.print(f"  ⚠️  {search_provider.capitalize()} API key not provided — search will not work")
+        console.print(f"  âš ï¸  {search_provider.capitalize()} API key not provided â€” search will not work")
 
     # --- Step 8: Validate GitHub token ---
     if gh_token:
         with console.status("[cyan]Validating GitHub token...[/cyan]"):
             ok, msg = _validate_github_token(gh_token)
         if ok:
-            console.print(f"  ✅ GitHub: {msg}")
+            console.print(f"  âœ… GitHub: {msg}")
         else:
-            console.print(f"  ❌ GitHub: {msg}")
+            console.print(f"  âŒ GitHub: {msg}")
     else:
-        console.print("  ⚠️  GitHub token not provided — issue fetching will not work")
+        console.print("  âš ï¸  GitHub token not provided â€” issue fetching will not work")
 
     # --- Step 9: Build and save config ---
     config = DevAgentConfig(
@@ -446,7 +446,7 @@ def init() -> None:
             f"Config file: [dim]{get_config_path()}[/dim]\n"
             f"Provider: [cyan]{provider}[/cyan]\n"
             f"Model: [cyan]{model}[/cyan]",
-            title="✅ DevAgent Setup Complete",
+            title="âœ… DevAgent Setup Complete",
             border_style="green",
         )
     )
@@ -469,7 +469,7 @@ def config(
             console.print(
                 Panel(
                     "No configuration found. Run [bold cyan]devagent init[/bold cyan] first.",
-                    title="❌ No Config",
+                    title="âŒ No Config",
                     border_style="red",
                 )
             )
@@ -563,7 +563,7 @@ def config(
 
         setattr(obj, final_key, value)
         save_config(cfg)
-        console.print(f"[green]✅ Set {key} = {value}[/green]")
+        console.print(f"[green]âœ… Set {key} = {value}[/green]")
 
 
 @app.command()
@@ -589,7 +589,7 @@ def index(
     project_root, found_marker = detect_project_root()
     if not found_marker:
         console.print(
-            "[yellow]⚠️  No project marker found (.git, pyproject.toml, etc.). "
+            "[yellow]âš ï¸  No project marker found (.git, pyproject.toml, etc.). "
             f"Using current directory: {project_root}[/yellow]\n"
         )
     else:
@@ -607,7 +607,7 @@ def index(
                 Panel(
                     "This project has not been indexed yet.\n"
                     "Run [bold cyan]devagent index[/bold cyan] to create the index.",
-                    title="📊 Index Status",
+                    title="ðŸ“Š Index Status",
                     border_style="yellow",
                 )
             )
@@ -616,7 +616,7 @@ def index(
         # Check for changes
         changes = asyncio.run(get_changed_files_count(project_root, sqlite_path))
 
-        table = Table(title="📊 Index Status", border_style="cyan")
+        table = Table(title="ðŸ“Š Index Status", border_style="cyan")
         table.add_column("Metric", style="bold")
         table.add_column("Value", justify="right")
 
@@ -632,11 +632,11 @@ def index(
         total_changes = changes["changed"] + changes["new"] + changes["deleted"]
         if total_changes > 0:
             console.print(
-                f"\n[yellow]⚠️  {total_changes} file(s) changed since last index. "
+                f"\n[yellow]âš ï¸  {total_changes} file(s) changed since last index. "
                 "Run [bold]devagent index[/bold] to update.[/yellow]"
             )
         else:
-            console.print("\n[green]✅ Index is up to date.[/green]")
+            console.print("\n[green]âœ… Index is up to date.[/green]")
         return
 
     # --- --clear flag ---
@@ -654,7 +654,7 @@ def index(
             return
 
         clear_project_index(project_root)
-        console.print("[green]✅ Index cleared successfully.[/green]")
+        console.print("[green]âœ… Index cleared successfully.[/green]")
         return
 
     # --- Default: run indexing ---
@@ -662,7 +662,7 @@ def index(
         console.print(
             Panel(
                 "No configuration found. Run [bold cyan]devagent init[/bold cyan] first.",
-                title="❌ No Config",
+                title="âŒ No Config",
                 border_style="red",
             )
         )
@@ -675,7 +675,7 @@ def index(
             f"[bold cyan]Indexing project...[/bold cyan]\n"
             f"Mode: [cyan]{'incremental' if incremental else 'full rebuild'}[/cyan]\n"
             f"Project: [dim]{project_root}[/dim]",
-            title="🔍 DevAgent Indexer",
+            title="ðŸ” DevAgent Indexer",
             border_style="cyan",
         )
     )
@@ -738,13 +738,13 @@ def index(
 
         chroma_dir = get_chroma_dir(project_root)
         console.print(f"\n[dim]Index stored at: {chroma_dir.parent}[/dim]")
-        console.print("[green]✅ Indexing complete.[/green]")
+        console.print("[green]âœ… Indexing complete.[/green]")
 
     except Exception as exc:
         console.print(
             Panel(
                 f"[red bold]Indexing failed[/red bold]\n\n{exc}",
-                title="❌ Error",
+                title="âŒ Error",
                 border_style="red",
             )
         )
@@ -762,23 +762,20 @@ def analyze(
         help="Output format: terminal, markdown, both, json",
     ),
     repo: Optional[str] = typer.Option(
-        None, "--repo", "-r", help="GitHub repo (owner/repo) — overrides default"
+        None, "--repo", "-r", help="GitHub repo (owner/repo) â€” overrides default"
     ),
     chat: bool = typer.Option(False, "--chat", "-c", help="Drop into chat session after analysis"),
 ) -> None:
-    """Run full gap analysis on a spec against the current codebase."""
-    import asyncio
-    import json
-    from pathlib import Path
+    """Run gap analysis / implement a spec against the current codebase."""
+    console.print(
+        "[yellow]devagent analyze[/yellow] is being rebuilt as part of the "
+        "agent harness (Phase 1). Use [bold]devagent[/bold] (the interactive "
+        "session) once Phase 1 is complete.\n\n"
+        "[dim]Track progress: DEVAGENT_ROADMAP.md[/dim]"
+    )
+    raise typer.Exit(0)
 
-    from devagent.agents.pipeline import run_pipeline
-    from devagent.core.project import detect_project_root
-    from devagent.core.storage import get_index_status, get_sqlite_path
-    from devagent.mcp.manager import MCPManager
-    from devagent.output.markdown import generate_markdown_report
-    from devagent.output.terminal import render_gap_report
-
-    if not config_exists():
+    if not config_exists():  # noqa: unreachable — preserved for reference
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
         raise typer.Exit(1)
 
@@ -790,7 +787,7 @@ def analyze(
     sqlite_path = get_sqlite_path(project_root)
     idx_status = asyncio.run(get_index_status(sqlite_path))
     if not idx_status["exists"]:
-        console.print("[yellow]⚠️ This project has not been indexed yet.[/yellow]")
+        console.print("[yellow]âš ï¸ This project has not been indexed yet.[/yellow]")
         if Confirm.ask("Do you want to index it now?"):
             index(full=False, status=False, clear=False)
         else:
@@ -824,7 +821,7 @@ def analyze(
         # If it's a PR URL, show a note
         if resource_type == "pull_request":
             console.print(
-                f"[dim]Note: Analyzing PR #{parsed_url.number} as a spec — "
+                f"[dim]Note: Analyzing PR #{parsed_url.number} as a spec â€” "
                 f"extracting intent from PR description and title.[/dim]"
             )
 
@@ -900,7 +897,7 @@ def analyze(
     if output in ("markdown", "both"):
         md_path = generate_markdown_report(report, project_root, project_name)
         if output == "markdown":
-            console.print(f"[green]✅ Markdown report saved to: [cyan]{md_path}[/cyan][/green]")
+            console.print(f"[green]âœ… Markdown report saved to: [cyan]{md_path}[/cyan][/green]")
             return
 
     if output in ("terminal", "both"):
@@ -987,7 +984,7 @@ def reports(
             Panel(
                 "No reports found for this project.\n"
                 "Run [bold cyan]devagent analyze[/bold cyan] to generate one.",
-                title="📄 Reports",
+                title="ðŸ“„ Reports",
                 border_style="yellow",
             )
         )
@@ -1012,17 +1009,17 @@ def reports(
             console.print(f"[red]No report matching '{show}' found.[/red]")
             console.print("[dim]Available reports:[/dim]")
             for rf in report_files:
-                console.print(f"  • {rf.stem}")
+                console.print(f"  â€¢ {rf.stem}")
             return
 
         content = match.read_text(encoding="utf-8")
         console.print()
-        console.print(Panel(f"[dim]{match.name}[/dim]", title="📄 Report", border_style="cyan"))
+        console.print(Panel(f"[dim]{match.name}[/dim]", title="ðŸ“„ Report", border_style="cyan"))
         console.print(Markdown(content))
         return
 
     # --- Default: list all reports ---
-    table = Table(title="📄 Saved Reports", border_style="cyan")
+    table = Table(title="ðŸ“„ Saved Reports", border_style="cyan")
     table.add_column("#", style="dim", justify="right")
     table.add_column("Report", style="cyan")
     table.add_column("Source")
@@ -1049,7 +1046,7 @@ def reports(
         # Count requirements (lines starting with ####)
         req_count = content.count("#### REQ-")
         # Count conflicts (lines containing CONFLICT)
-        conflict_count = content.count("🚨 CONFLICT")
+        conflict_count = content.count("ðŸš¨ CONFLICT")
 
         # Truncate source for table display
         if len(source) > 40:
@@ -1188,7 +1185,7 @@ def watch(
         asyncio.run(_watch_register(repo, interval_minutes, label_list))
         return
 
-    # No flags — show usage hint
+    # No flags â€” show usage hint
     console.print(
         "[dim]Usage: devagent watch --repo owner/repo    (to start watching)\n"
         "       devagent watch --status              (to check now)\n"
@@ -1259,8 +1256,8 @@ async def _watch_register(repo_str: str, interval_minutes: int, labels: list[str
     await init_watcher_db()
     await register_repo(owner, repo_name, interval_minutes, labels)
     console.print(
-        f"[green]✓[/green] Now watching [bold]{owner}/{repo_name}[/bold]  "
-        f"·  checking every {interval_minutes} minutes"
+        f"[green]âœ“[/green] Now watching [bold]{owner}/{repo_name}[/bold]  "
+        f"Â·  checking every {interval_minutes} minutes"
     )
     console.print("[dim]Run 'devagent watch --status' to run the first check now.[/dim]")
 
@@ -1299,7 +1296,7 @@ async def _watch_stop(repo_str: str) -> None:
     owner, repo_name = _split_repo_string(repo_str)
     await init_watcher_db()
     await deactivate_repo(owner, repo_name)
-    console.print(f"[green]✓[/green] Stopped watching [bold]{owner}/{repo_name}[/bold]")
+    console.print(f"[green]âœ“[/green] Stopped watching [bold]{owner}/{repo_name}[/bold]")
     console.print("[dim]Historical analysis data is preserved.[/dim]")
 
 
@@ -1338,33 +1335,11 @@ async def _watch_show(owner: str, repo: str, issue_number: int, cfg, project_roo
             f"[dim]Generating full analysis for #{issue_number}... "
             f"(this may take 30-60 seconds)[/dim]"
         )
-        import asyncio as _asyncio
-        from devagent.agents.pipeline import run_pipeline
-
-        async def _run():
-            async with MCPManager(cfg, project_root) as mcp:
-                return await run_pipeline(
-                    cfg, mcp,
-                    spec_text=f"{analysis.issue_title}\n\n(Re-running from watcher analysis)",
-                    spec_source=f"https://github.com/{owner}/{repo}/issues/{issue_number}",
-                    project_root=str(project_root),
-                )
-
-        try:
-            gap_report = _asyncio.run(_run())
-        except typer.Exit:
-            raise
-        except Exception as exc:
-            _handle_error(exc)
-            return
-
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        report_json.write_text(gap_report.model_dump_json())
-        await mark_full_report_available(owner, repo, issue_number)
-
-        from devagent.output.terminal import render_gap_report
-        from devagent.output.markdown import generate_markdown_report
-        render_gap_report(gap_report, f"{owner}/{repo}", report_json)
+        console.print(
+            "[yellow]Full pipeline re-run is not available yet.[/yellow] "
+            "It will be restored once the agent harness (Phase 1) is complete."
+        )
+        return
         generate_markdown_report(gap_report, project_root, f"{owner}/{repo}")
 
     console.print()
@@ -1397,13 +1372,13 @@ def doctor() -> None:
     if config_exists():
         try:
             cfg = load_config()
-            table.add_row("Config File", "✅", str(get_config_path()))
+            table.add_row("Config File", "âœ…", str(get_config_path()))
         except Exception as exc:
             cfg = None
-            table.add_row("Config File", "❌", f"Invalid: {exc}")
+            table.add_row("Config File", "âŒ", f"Invalid: {exc}")
     else:
         cfg = None
-        table.add_row("Config File", "❌", "Not found — run: devagent init")
+        table.add_row("Config File", "âŒ", "Not found â€” run: devagent init")
 
     # 2. LLM provider
     if cfg:
@@ -1415,42 +1390,42 @@ def doctor() -> None:
                 msg = f"API key configured for {cfg.llm.provider}" if ok else "No API key"
         table.add_row(
             f"LLM ({cfg.llm.provider})",
-            "✅" if ok else "❌",
+            "âœ…" if ok else "âŒ",
             msg,
         )
     else:
-        table.add_row("LLM Provider", "❌", "No config")
+        table.add_row("LLM Provider", "âŒ", "No config")
 
     # 3. GitHub token
     if cfg and cfg.github.token:
         with console.status("[dim]Checking GitHub token...[/dim]"):
             ok, msg = _validate_github_token(cfg.github.token)
-        table.add_row("GitHub Token", "✅" if ok else "❌", msg)
+        table.add_row("GitHub Token", "âœ…" if ok else "âŒ", msg)
     else:
-        table.add_row("GitHub Token", "❌", "Not configured")
+        table.add_row("GitHub Token", "âŒ", "Not configured")
 
     # 4. Search provider
     if cfg:
         if cfg.search_provider == "brave" and cfg.brave.api_key:
             with console.status("[dim]Checking Brave Search...[/dim]"):
                 ok, msg = _validate_brave_key(cfg.brave.api_key)
-            table.add_row("Brave Search", "✅" if ok else "❌", msg)
+            table.add_row("Brave Search", "âœ…" if ok else "âŒ", msg)
         elif cfg.search_provider == "searchx" and cfg.searchx.api_key:
             with console.status("[dim]Checking SearchX...[/dim]"):
                 ok, msg = _validate_searchx_key(cfg.searchx.api_key)
-            table.add_row("SearchX", "✅" if ok else "❌", msg)
+            table.add_row("SearchX", "âœ…" if ok else "âŒ", msg)
         else:
-            table.add_row(f"{cfg.search_provider.capitalize()} Search", "⚠️", "Not configured (optional)")
+            table.add_row(f"{cfg.search_provider.capitalize()} Search", "âš ï¸", "Not configured (optional)")
     else:
-        table.add_row("Search Provider", "❌", "No config")
+        table.add_row("Search Provider", "âŒ", "No config")
 
     # 5. Node.js
     ok, msg = _check_command(["node", "--version"])
-    table.add_row("Node.js", "✅" if ok else "❌", msg if ok else "Not found — download from nodejs.org")
+    table.add_row("Node.js", "âœ…" if ok else "âŒ", msg if ok else "Not found â€” download from nodejs.org")
 
     # 6. npx
     ok, msg = _check_command(["npx", "--version"])
-    table.add_row("npx", "✅" if ok else "❌", msg if ok else "Not found — install Node.js")
+    table.add_row("npx", "âœ…" if ok else "âŒ", msg if ok else "Not found â€” install Node.js")
 
     console.print(table)
     console.print()
