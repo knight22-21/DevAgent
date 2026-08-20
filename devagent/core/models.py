@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -164,4 +164,71 @@ class WatchHealthReport(BaseModel):
     cross_issue_conflicts: list[CrossIssueConflict]
     total_watched_issues: int
     next_check_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1+ — Agent harness models
+# ---------------------------------------------------------------------------
+
+class ToolCall(BaseModel):
+    """A single tool invocation by the agent."""
+    tool_name: str
+    args: dict[str, Any]
+    call_id: str = ""
+
+
+class ToolResult(BaseModel):
+    """The result of a tool invocation."""
+    tool_name: str
+    call_id: str = ""
+    success: bool
+    output: Any = None
+    error: str | None = None
+    duration_ms: float = 0.0
+    # Security gate result for file writes
+    security_status: Literal["pass", "warn", "block"] | None = None
+    security_issues: list[str] = []
+
+
+class SessionEvent(BaseModel):
+    """One recorded event in the agent's session journal (for undo)."""
+    event_id: str
+    event_type: Literal["tool_call", "file_write", "shell_exec", "user_message", "agent_message"]
+    created_at: datetime = Field(default_factory=datetime.now)
+    tool_call: ToolCall | None = None
+    tool_result: ToolResult | None = None
+    message: str | None = None
+    # For file_write events — used by undo
+    file_path: str | None = None
+    content_before: str | None = None
+    content_after: str | None = None
+
+
+class TokenUsage(BaseModel):
+    """Token and cost tracking for one model."""
+    model: str
+    provider: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+
+
+class AgentSession(BaseModel):
+    """A persistent agent chat session."""
+    session_id: str
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_active_at: datetime = Field(default_factory=datetime.now)
+    project_path: str
+    repo_owner: str = ""
+    repo_name: str = ""
+    git_branch: str = ""
+    task_description: str = ""
+    # Compact structured knowledge built up during the session
+    learned_facts: list[str] = []
+    files_understood: dict[str, str] = {}
+    # Token accounting
+    token_usage: list[TokenUsage] = []
+    total_cost_usd: float = 0.0
+    # Journal of all events (tool calls, writes, messages) — enables undo
+    events: list[SessionEvent] = []
 
