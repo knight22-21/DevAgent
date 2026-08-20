@@ -1,23 +1,25 @@
-"""MCP Manager — launches and manages all 5 MCP server processes."""
+"""MCP Manager — launches and manages MCP server processes.
+
+Phase 0: code_search server removed (replaced by codeprism-ai).
+         spec_analysis server path updated to legacy location.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.shared.exceptions import McpError
 
 from devagent.core.config import DevAgentConfig
 from devagent.core.storage import get_config_path
 from devagent.mcp.client import MCPClient
 from devagent.mcp.clients.brave_client import BraveClient
-from devagent.mcp.clients.code_search_client import CodeSearchClient
 from devagent.mcp.clients.filesystem_client import FilesystemClient
 from devagent.mcp.clients.github_client import GitHubClient
 from devagent.mcp.clients.searchx_client import SearchXClient
@@ -43,7 +45,6 @@ class MCPManager:
         self.brave: BraveClient | None = None
         self.searchx: SearchXClient | None = None
         self.spec_analysis: SpecAnalysisClient | None = None
-        self.code_search: CodeSearchClient | None = None
 
     def _check_node(self) -> None:
         """Verify Node.js is installed."""
@@ -115,28 +116,17 @@ class MCPManager:
             await sx_session.initialize()
             self.searchx = SearchXClient(MCPClient(sx_session, "SearchX"))
             
-        # 4. SpecAnalysis Server (Python)
+        # 4. SpecAnalysis Server — legacy Python MCP (used by devagent analyze)
         sa_params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "devagent.mcp.servers.spec_analysis.server"],
+            args=["-m", "devagent.legacy.mcp.servers.spec_analysis.server"],
             env=env
         )
         sa_transport = await self._exit_stack.enter_async_context(stdio_client(sa_params))
         sa_session = await self._exit_stack.enter_async_context(ClientSession(*sa_transport))
         await sa_session.initialize()
         self.spec_analysis = SpecAnalysisClient(MCPClient(sa_session, "SpecAnalysis"))
-        
-        # 5. CodeSearch Server (Python)
-        cs_params = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "devagent.mcp.servers.code_search.server"],
-            env=env
-        )
-        cs_transport = await self._exit_stack.enter_async_context(stdio_client(cs_params))
-        cs_session = await self._exit_stack.enter_async_context(ClientSession(*cs_transport))
-        await cs_session.initialize()
-        self.code_search = CodeSearchClient(MCPClient(cs_session, "CodeSearch"))
-        
+
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
