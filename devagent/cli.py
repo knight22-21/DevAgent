@@ -1349,6 +1349,250 @@ async def _watch_show(owner: str, repo: str, issue_number: int, cfg, project_roo
     )
 
 
+# ---------------------------------------------------------------------------
+# session sub-app
+# ---------------------------------------------------------------------------
+
+session_app = typer.Typer(name="session", help="Manage agent sessions.", add_completion=False)
+app.add_typer(session_app, name="session")
+
+
+@session_app.command("list")
+def session_list(
+    limit: int = typer.Option(20, "--limit", "-n", help="Max sessions to show"),
+) -> None:
+    """List recent agent sessions."""
+    from devagent.session.manager import SessionManager
+    import datetime
+
+    mgr = SessionManager()
+    sessions = mgr.list(limit=limit)
+    if not sessions:
+        console.print("[yellow]No sessions found.[/yellow]")
+        return
+
+    table = Table(title="Agent Sessions", border_style="cyan")
+    table.add_column("ID", style="dim", max_width=12)
+    table.add_column("Title")
+    table.add_column("Model")
+    table.add_column("Updated", style="dim")
+
+    for s in sessions:
+        updated = datetime.datetime.fromtimestamp(s["updated_at"]).strftime("%Y-%m-%d %H:%M")
+        table.add_row(s["id"][:8], s["title"] or "(untitled)", s["model"], updated)
+
+    console.print()
+    console.print(table)
+
+
+@session_app.command("show")
+def session_show(
+    session_id: str = typer.Argument(..., help="Session ID (or prefix)"),
+) -> None:
+    """Show events and token usage for a session."""
+    from devagent.session.manager import SessionManager
+    import datetime
+
+    mgr = SessionManager()
+    sessions = mgr.list(limit=200)
+    match = next((s for s in sessions if s["id"].startswith(session_id)), None)
+    if not match:
+        console.print(f"[red]Session not found: {session_id}[/red]")
+        raise typer.Exit(1)
+
+    full_id = match["id"]
+    events = mgr.get_events(full_id)
+    totals = mgr.get_token_totals(full_id)
+
+    console.print()
+    console.print(Panel(
+        f"[bold]{match['title']}[/bold]\n"
+        f"ID: [dim]{full_id}[/dim]\n"
+        f"Model: {match['model']} ({match['provider']})\n"
+        f"Tokens: {totals['tokens_in']:,} in / {totals['tokens_out']:,} out",
+        title="Session",
+        border_style="cyan",
+    ))
+
+    for ev in events:
+        role = ev["role"]
+        content = ev["content"]
+        tool_calls = ev.get("tool_calls") or []
+        if role == "user":
+            console.print(f"\n[bold cyan]You:[/bold cyan] {content[:200]}")
+        elif role == "assistant":
+            prefix = "[bold green]Agent:[/bold green] "
+            if tool_calls:
+                names = ", ".join(tc.get("name", "?") for tc in tool_calls)
+                console.print(f"{prefix}[dim](called: {names})[/dim]")
+            if content:
+                console.print(f"{prefix}{content[:200]}")
+        elif role == "tool_result":
+            console.print(f"  [dim]result[{ev.get('tool_name')}]: {content[:100]}[/dim]")
+
+
+@session_app.command("delete")
+def session_delete(
+    session_id: str = typer.Argument(..., help="Session ID (or prefix)"),
+) -> None:
+    """Delete a session and all its events."""
+    from devagent.session.manager import SessionManager
+
+    mgr = SessionManager()
+    sessions = mgr.list(limit=200)
+    match = next((s for s in sessions if s["id"].startswith(session_id)), None)
+    if not match:
+        console.print(f"[red]Session not found: {session_id}[/red]")
+        raise typer.Exit(1)
+
+    if not Confirm.ask(f"Delete session '{match['title']}' ({match['id'][:8]})?", default=False):
+        console.print("[dim]Cancelled.[/dim]")
+        return
+
+    mgr.delete(match["id"])
+    console.print("[green]Session deleted.[/green]")
+
+
+# ---------------------------------------------------------------------------
+# Primary agent run command
+# ---------------------------------------------------------------------------
+
+@app.command()
+def run(
+    resume: Optional[str] = typer.Option(
+        None, "--resume", "-r", help="Resume a previous session by ID prefix"
+    ),
+    project: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Project path (defaults to current directory)"
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model", "-m", help="Override model (e.g. qwen2.5-coder:7b)"
+    ),
+    max_tokens: Optional[int] = typer.Option(
+        None, "--max-tokens", help="Token budget for this session"
+    ),
+) -> None:
+    """Start an interactive agent session (the main DevAgent command)."""
+    from devagent.agent.loop import AgentLoop
+    from devagent.agent.system_prompt import build_system_prompt
+    from devagent.core.project import detect_project_root
+    from devagent.output.streaming import render_events
+    from devagent.session.budget import TokenBudget
+    from devagent.session.manager import SessionManager
+    from devagent.session.memory import MemoryBlock
+    from devagent.tools.registry import build_registry
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+
+    project_root, _ = detect_project_root(Path(project) if project else None)
+    registry = build_registry(project_root=str(project_root))
+
+    from devagent.core.llm import LLMClient
+    llm = LLMClient(cfg.llm)
+
+    mgr = SessionManager()
+
+    if resume:
+        sessions = mgr.list(limit=200)
+        match = next((s for s in sessions if s["id"].startswith(resume)), None)
+        if not match:
+            console.print(f"[red]Session not found: {resume}[/red]")
+            raise typer.Exit(1)
+        session_id = match["id"]
+        console.print(f"[dim]Resuming session: {match['title']} ({session_id[:8]})[/dim]\n")
+    else:
+        session_id = mgr.new(
+            project=str(project_root),
+            model=cfg.llm.model,
+            provider=cfg.llm.provider,
+        )
+        console.print(f"[dim]New session: {session_id[:8]}[/dim]\n")
+
+    budget = TokenBudget(
+        max_tokens=max_tokens,
+        warn_at_percent=cfg.budget.warn_at_percent,
+    )
+    memory = MemoryBlock(session_id)
+    system_prompt = build_system_prompt(project_description=f"Project: {project_root.name}")
+
+    loop = AgentLoop(
+        llm=llm,
+        registry=registry,
+        session_mgr=mgr,
+        session_id=session_id,
+        memory=memory,
+        budget=budget,
+        system_prompt=system_prompt,
+    )
+
+    console.print(
+        Panel(
+            f"[bold cyan]DevAgent[/bold cyan]  |  {cfg.llm.provider}/{cfg.llm.model}\n"
+            f"[dim]Project: {project_root}[/dim]\n"
+            "[dim]Type your message and press Enter. Ctrl+C to exit.[/dim]",
+            border_style="cyan",
+        )
+    )
+
+    # Set a useful session title from the first user message
+    title_set = resume is not None
+
+    try:
+        while True:
+            try:
+                user_input = console.input("[bold cyan]>[/bold cyan] ").strip()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]Session ended.[/dim]")
+                summary = budget.summary()
+                console.print(
+                    f"[dim]Total: {summary['total_tokens']:,} tokens "
+                    f"({summary['llm_calls']} LLM calls)[/dim]"
+                )
+                break
+
+            if not user_input:
+                continue
+
+            if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
+                console.print("[dim]Session ended.[/dim]")
+                break
+
+            if user_input.lower() == "/memory":
+                mem = memory.all()
+                if mem:
+                    for k, v in mem.items():
+                        console.print(f"  [bold]{k}[/bold]: {v}")
+                else:
+                    console.print("[dim]No memory items.[/dim]")
+                continue
+
+            if user_input.lower() == "/tokens":
+                summary = budget.summary()
+                console.print(
+                    f"  Tokens: {summary['input_tokens']:,} in / "
+                    f"{summary['output_tokens']:,} out / "
+                    f"{summary['total_tokens']:,} total"
+                )
+                continue
+
+            if not title_set:
+                title = user_input[:60]
+                mgr.set_title(session_id, title)
+                title_set = True
+
+            events = loop.run(user_input)
+            render_events(events)
+
+    except Exception as exc:
+        _handle_error(exc)
+
+
 @app.command()
 def doctor() -> None:
 
