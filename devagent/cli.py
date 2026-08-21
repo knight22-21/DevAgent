@@ -5,7 +5,6 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 import httpx
 import typer
@@ -19,7 +18,6 @@ from devagent.core.config import (
     DevAgentConfig,
     GitHubConfig,
     LLMConfig,
-    LLMFallbackConfig,
     OutputConfig,
     SearchXConfig,
     config_exists,
@@ -27,7 +25,7 @@ from devagent.core.config import (
     save_config,
 )
 from devagent.core.storage import get_config_path
-from devagent.core.url_parser import parse_github_url, format_repo_string, InvalidGitHubURLError
+from devagent.core.url_parser import InvalidGitHubURLError, format_repo_string, parse_github_url
 
 app = typer.Typer(
     name="devagent",
@@ -54,6 +52,7 @@ def main(
 def _handle_error(exc: Exception) -> None:
     """Display a user-friendly error panel instead of a raw traceback."""
     import traceback
+
     from devagent.mcp.manager import NodeNotFoundError
 
     # Map known exceptions to friendly messages
@@ -455,7 +454,7 @@ def init() -> None:
 @app.command()
 def config(
     show: bool = typer.Option(False, "--show", help="Display current configuration"),
-    set_value: Optional[str] = typer.Option(
+    set_value: str | None = typer.Option(
         None, "--set", help="Update a config value (key=value, supports dot notation)"
     ),
 ) -> None:
@@ -683,14 +682,12 @@ def index(
     async def _run_index() -> dict:
         """Launch CodeSearchMCP and run indexing."""
         import json
-        import sys
+        import os
 
         from mcp import ClientSession
         from mcp.client.stdio import StdioServerParameters, stdio_client
 
         from devagent.core.storage import get_config_path
-
-        import os
         env = os.environ.copy()
         env["SPECSYNC_CONFIG_PATH"] = str(get_config_path())
 
@@ -700,24 +697,23 @@ def index(
             env=env,
         )
 
-        async with stdio_client(params) as transport:
-            async with ClientSession(*transport) as session:
-                await session.initialize()
+        async with stdio_client(params) as transport, ClientSession(*transport) as session:
+            await session.initialize()
 
-                result = await session.call_tool(
-                    "index_codebase",
-                    {
-                        "project_root": str(project_root.resolve()),
-                        "incremental": incremental,
-                    },
-                )
+            result = await session.call_tool(
+                "index_codebase",
+                {
+                    "project_root": str(project_root.resolve()),
+                    "incremental": incremental,
+                },
+            )
 
-                if result.isError:
-                    error_text = result.content[0].text if result.content else "Unknown error"
-                    raise RuntimeError(f"Indexing failed: {error_text}")
+            if result.isError:
+                error_text = result.content[0].text if result.content else "Unknown error"
+                raise RuntimeError(f"Indexing failed: {error_text}")
 
-                text = result.content[0].text if result.content else "{}"
-                return json.loads(text)
+            text = result.content[0].text if result.content else "{}"
+            return json.loads(text)
 
     try:
         with console.status("[cyan]Indexing codebase (this may take a moment on first run)...[/cyan]"):
@@ -753,15 +749,15 @@ def index(
 
 @app.command()
 def analyze(
-    issue: Optional[int] = typer.Option(None, "--issue", "-i", help="GitHub issue number to analyze"),
-    spec: Optional[str] = typer.Option(None, "--spec", "-s", help="Path to a spec file (markdown/text)"),
-    text: Optional[str] = typer.Option(None, "--text", "-t", help="Inline spec text to analyze"),
-    url: Optional[str] = typer.Option(None, "--url", "-u", help="Full GitHub issue or PR URL"),
-    output: Optional[str] = typer.Option(
+    issue: int | None = typer.Option(None, "--issue", "-i", help="GitHub issue number to analyze"),
+    spec: str | None = typer.Option(None, "--spec", "-s", help="Path to a spec file (markdown/text)"),
+    text: str | None = typer.Option(None, "--text", "-t", help="Inline spec text to analyze"),
+    url: str | None = typer.Option(None, "--url", "-u", help="Full GitHub issue or PR URL"),
+    output: str | None = typer.Option(
         "both", "--output", "-o",
         help="Output format: terminal, markdown, both, json",
     ),
-    repo: Optional[str] = typer.Option(
+    repo: str | None = typer.Option(
         None, "--repo", "-r", help="GitHub repo (owner/repo) â€” overrides default"
     ),
     chat: bool = typer.Option(False, "--chat", "-c", help="Drop into chat session after analysis"),
@@ -775,7 +771,7 @@ def analyze(
     )
     raise typer.Exit(0)
 
-    if not config_exists():  # noqa: unreachable — preserved for reference
+    if not config_exists():  # preserved for reference — unreachable after Exit above
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
         raise typer.Exit(1)
 
@@ -915,6 +911,7 @@ def search(
 ) -> None:
     """Semantic search across the indexed codebase."""
     import asyncio
+
     from devagent.core.project import detect_project_root
     
     if not config_exists():
@@ -965,12 +962,11 @@ def search(
 
 @app.command()
 def reports(
-    show: Optional[str] = typer.Option(
+    show: str | None = typer.Option(
         None, "--show", help="Re-display a saved report by filename or partial match"
     ),
 ) -> None:
     """List or display saved analysis reports for the current project."""
-    import re
     from rich.markdown import Markdown
 
     from devagent.core.project import detect_project_root
@@ -1062,16 +1058,13 @@ def reports(
 
 @app.command()
 def chat(
-    report_name: Optional[str] = typer.Option(
+    report_name: str | None = typer.Option(
         None, "--report", "-r", help="Name of the saved report to chat about"
     ),
 ) -> None:
     """Start an interactive chat session about a saved gap report."""
-    import asyncio
-    import json
     from devagent.core.project import detect_project_root
     from devagent.core.storage import get_reports_dir
-    from devagent.chat.session import ChatSession
 
     if not config_exists():
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
@@ -1127,15 +1120,15 @@ def chat(
 
 @app.command()
 def watch(
-    repo: Optional[str] = typer.Option(None, "--repo", "-r", help="GitHub repo as owner/repo"),
+    repo: str | None = typer.Option(None, "--repo", "-r", help="GitHub repo as owner/repo"),
     status: bool = typer.Option(False, "--status", help="Run a check right now and show results"),
     start: bool = typer.Option(False, "--start", help="Start background scheduler (foreground process)"),
     stop: bool = typer.Option(False, "--stop", help="Stop watching a repo"),
     list_repos: bool = typer.Option(False, "--list", help="List all watched repos"),
     report: bool = typer.Option(False, "--report", help="Show all analysed issues for a repo"),
-    show: Optional[int] = typer.Option(None, "--show", help="Show full analysis for a specific issue number"),
+    show: int | None = typer.Option(None, "--show", help="Show full analysis for a specific issue number"),
     interval: str = typer.Option("30m", "--interval", help="Check interval: 30m, 1h, 6h, 12h, 24h"),
-    labels: Optional[str] = typer.Option(None, "--labels", help="Comma-separated label filters e.g. 'feature,enhancement'"),
+    labels: str | None = typer.Option(None, "--labels", help="Comma-separated label filters e.g. 'feature,enhancement'"),
 ) -> None:
     """Monitor a GitHub repo for new issues and detect cross-issue conflicts."""
     import asyncio
@@ -1218,7 +1211,7 @@ def _split_repo_string(repo_str: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def _parse_repo_or_infer(repo: Optional[str], project_root) -> tuple[str, str]:
+def _parse_repo_or_infer(repo: str | None, project_root) -> tuple[str, str]:
     """Returns (owner, repo_name). If repo not given, infers from git remote."""
     if repo:
         return _split_repo_string(repo)
@@ -1236,8 +1229,7 @@ def _parse_repo_or_infer(repo: Optional[str], project_root) -> tuple[str, str]:
             from devagent.core.url_parser import parse_github_url
             if remote_url.startswith("git@"):
                 remote_url = remote_url.replace("git@github.com:", "https://github.com/")
-            if remote_url.endswith(".git"):
-                remote_url = remote_url[:-4]
+            remote_url = remote_url.removesuffix(".git")
             parsed = parse_github_url(remote_url + "/issues/1")
             return parsed.owner, parsed.repo
     except Exception:
@@ -1263,8 +1255,8 @@ async def _watch_register(repo_str: str, interval_minutes: int, labels: list[str
 
 
 async def _watch_run_once(owner: str, repo: str, cfg, project_root) -> None:
-    from devagent.watcher.storage import init_watcher_db, get_watched_repo
     from devagent.watcher.scheduler import WatcherScheduler
+    from devagent.watcher.storage import get_watched_repo, init_watcher_db
     await init_watcher_db()
     watched_repo = await get_watched_repo(owner, repo)
     if not watched_repo:
@@ -1276,23 +1268,23 @@ async def _watch_run_once(owner: str, repo: str, cfg, project_root) -> None:
 
 
 async def _watch_start(cfg, project_root, interval_minutes: int) -> None:
-    from devagent.watcher.storage import init_watcher_db
     from devagent.watcher.scheduler import WatcherScheduler
+    from devagent.watcher.storage import init_watcher_db
     await init_watcher_db()
     scheduler = WatcherScheduler(cfg, project_root, interval_minutes)
     await scheduler.start()
 
 
 async def _watch_list() -> None:
-    from devagent.watcher.storage import init_watcher_db, list_watched_repos
     from devagent.output.watcher_renderer import render_watched_repos
+    from devagent.watcher.storage import init_watcher_db, list_watched_repos
     await init_watcher_db()
     repos = await list_watched_repos()
     render_watched_repos(repos)
 
 
 async def _watch_stop(repo_str: str) -> None:
-    from devagent.watcher.storage import init_watcher_db, deactivate_repo
+    from devagent.watcher.storage import deactivate_repo, init_watcher_db
     owner, repo_name = _split_repo_string(repo_str)
     await init_watcher_db()
     await deactivate_repo(owner, repo_name)
@@ -1301,19 +1293,16 @@ async def _watch_stop(repo_str: str) -> None:
 
 
 async def _watch_report(owner: str, repo: str) -> None:
-    from devagent.watcher.storage import init_watcher_db, get_all_analyses_for_repo
     from devagent.output.watcher_renderer import render_all_analyses
+    from devagent.watcher.storage import get_all_analyses_for_repo, init_watcher_db
     await init_watcher_db()
     analyses = await get_all_analyses_for_repo(owner, repo)
     render_all_analyses(analyses, owner, repo)
 
 
 async def _watch_show(owner: str, repo: str, issue_number: int, cfg, project_root) -> None:
-    from devagent.watcher.storage import (
-        init_watcher_db, get_analysis, mark_full_report_available
-    )
     from devagent.core.storage import get_watcher_reports_dir
-    from devagent.mcp.manager import MCPManager
+    from devagent.watcher.storage import get_analysis, init_watcher_db
 
     await init_watcher_db()
     analysis = await get_analysis(owner, repo, issue_number)
@@ -1362,8 +1351,9 @@ def session_list(
     limit: int = typer.Option(20, "--limit", "-n", help="Max sessions to show"),
 ) -> None:
     """List recent agent sessions."""
-    from devagent.session.manager import SessionManager
     import datetime
+
+    from devagent.session.manager import SessionManager
 
     mgr = SessionManager()
     sessions = mgr.list(limit=limit)
@@ -1378,7 +1368,7 @@ def session_list(
     table.add_column("Updated", style="dim")
 
     for s in sessions:
-        updated = datetime.datetime.fromtimestamp(s["updated_at"]).strftime("%Y-%m-%d %H:%M")
+        updated = datetime.datetime.fromtimestamp(s["updated_at"], tz=datetime.UTC).strftime("%Y-%m-%d %H:%M")
         table.add_row(s["id"][:8], s["title"] or "(untitled)", s["model"], updated)
 
     console.print()
@@ -1390,8 +1380,8 @@ def session_show(
     session_id: str = typer.Argument(..., help="Session ID (or prefix)"),
 ) -> None:
     """Show events and token usage for a session."""
+
     from devagent.session.manager import SessionManager
-    import datetime
 
     mgr = SessionManager()
     sessions = mgr.list(limit=200)
@@ -1459,16 +1449,16 @@ def session_delete(
 
 @app.command()
 def run(
-    resume: Optional[str] = typer.Option(
+    resume: str | None = typer.Option(
         None, "--resume", "-r", help="Resume a previous session by ID prefix"
     ),
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None, "--project", "-p", help="Project path (defaults to current directory)"
     ),
-    model: Optional[str] = typer.Option(
+    model: str | None = typer.Option(
         None, "--model", "-m", help="Override model (e.g. qwen2.5-coder:7b)"
     ),
-    max_tokens: Optional[int] = typer.Option(
+    max_tokens: int | None = typer.Option(
         None, "--max-tokens", help="Token budget for this session"
     ),
 ) -> None:
@@ -1520,9 +1510,9 @@ def run(
 @app.command()
 def implement(
     url: str = typer.Argument(..., help="GitHub issue URL (https://github.com/owner/repo/issues/N)"),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
-    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    model: str | None = typer.Option(None, "--model", "-m"),
 ) -> None:
     """Fetch a GitHub issue and implement it end-to-end (branch → edit → test → PR)."""
     from devagent.agent.flows import run_implement
@@ -1549,9 +1539,9 @@ def implement(
 @app.command()
 def review(
     url: str = typer.Argument(..., help="GitHub PR URL (https://github.com/owner/repo/pull/N)"),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
-    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    model: str | None = typer.Option(None, "--model", "-m"),
 ) -> None:
     """Fetch a GitHub PR diff and post an AI code review with inline comments."""
     from devagent.agent.flows import run_review
@@ -1578,9 +1568,9 @@ def review(
 @app.command()
 def triage(
     repo: str = typer.Argument(..., help="GitHub repo as owner/repo or full URL"),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
-    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    model: str | None = typer.Option(None, "--model", "-m"),
 ) -> None:
     """Classify open GitHub issues by effort and post triage comments."""
     from devagent.agent.flows import run_triage
@@ -1609,9 +1599,9 @@ def fix_ci(
     url: str = typer.Argument(
         ..., help="GitHub Actions run URL (https://github.com/owner/repo/actions/runs/ID)"
     ),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
-    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    model: str | None = typer.Option(None, "--model", "-m"),
 ) -> None:
     """Read failed CI logs and propose/apply a fix."""
     from devagent.agent.flows import run_fix_ci
@@ -1637,7 +1627,7 @@ def fix_ci(
 
 @app.command()
 def onboard(
-    project: Optional[str] = typer.Option(
+    project: str | None = typer.Option(
         None, "--project", "-p", help="Project path (defaults to current directory)"
     ),
     json_out: bool = typer.Option(False, "--json", help="Output raw JSON instead of rich display"),
@@ -1868,11 +1858,11 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
     port: int = typer.Option(7331, "--port", "-p", help="Port to listen on"),
     ui: bool = typer.Option(False, "--ui", help="Open graph visualisation UI (stub: not yet bundled)"),
-    project: Optional[str] = typer.Option(None, "--project", help="Project path"),
+    project: str | None = typer.Option(None, "--project", help="Project path"),
 ) -> None:
     """Start the DevAgent REST API server (port 7331 by default)."""
-    from devagent.server.app import serve as _serve
     from devagent.core.project import detect_project_root
+    from devagent.server.app import serve as _serve
 
     cfg = load_config() if config_exists() else None
     project_root, _ = detect_project_root(Path(project) if project else None)
