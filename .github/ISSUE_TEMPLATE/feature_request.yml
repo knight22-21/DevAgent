@@ -1,0 +1,58 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping shape DevAgent! Please describe what you'd like to see.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the pain point or gap this feature would address.
+      placeholder: "Currently I have to manually... and it would be great if..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should this work? CLI flags, new command, tool, config option?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: What other approaches did you think about?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Agent loop / reasoning
+        - Tool (new tool for the agent)
+        - LLM provider support
+        - GitHub integration
+        - CodePrism / graph
+        - CLI / UX
+        - REST API / UI
+        - Performance / benchmarks
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Are you willing to contribute this?
+      options:
+        - label: Yes, I can open a PR
+        - label: I can help test / review
+        - label: No, just suggesting
