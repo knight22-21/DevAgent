@@ -12,11 +12,12 @@ caller (CLI) can stream output while driving the loop.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Generator, Any
+from collections.abc import Generator
+from dataclasses import dataclass
+from typing import Any
 
-from devagent.core.llm import AgentMessage, LLMClient, ToolCallRequest
-from devagent.session.budget import TokenBudget, BudgetExceeded
+from devagent.core.llm import LLMClient
+from devagent.session.budget import BudgetExceeded, TokenBudget
 from devagent.session.history import build_messages
 from devagent.session.manager import SessionManager
 from devagent.session.memory import MemoryBlock
@@ -24,7 +25,7 @@ from devagent.tools.registry import ToolRegistry
 
 # Optional — only present when CodePrism is integrated
 try:
-    from devagent.codeprism.client import CodePrismClient
+    from devagent.codeprism.client import CodePrismClient  # noqa: F401
     from devagent.codeprism.session_overlay import build_session_overlay
     _HAS_CODEPRISM = True
 except ImportError:
@@ -32,7 +33,7 @@ except ImportError:
 
 # Optional — MultiModelRouter
 try:
-    from devagent.core.router import MultiModelRouter
+    from devagent.core.router import MultiModelRouter  # noqa: F401
     _HAS_ROUTER = True
 except ImportError:
     _HAS_ROUTER = False

@@ -19,12 +19,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
-
 
 # ---------------------------------------------------------------------------
 # URL parsers (issue, PR, CI run)
@@ -622,8 +620,9 @@ def run_fix_ci(cfg, project_root: Path, run_url: str, max_tokens: int | None = N
     parsed_run = _parse_run_url(run_url)
     repo_str = f"{parsed_run.owner}/{parsed_run.repo}"
 
-    from devagent.tools.github_tools import GitHubAPI
     import httpx as _httpx
+
+    from devagent.tools.github_tools import GitHubAPI
 
     gh = GitHubAPI(token)
 

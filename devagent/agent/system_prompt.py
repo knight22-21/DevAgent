@@ -8,7 +8,6 @@ The prompt is composed at session start and can be extended with:
 
 from __future__ import annotations
 
-
 _BASE = """\
 You are DevAgent, an AI coding assistant running locally on the developer's machine.
 You have direct access to the project files and can read, write, and edit them.
