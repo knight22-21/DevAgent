@@ -7,8 +7,6 @@ in any coding agent loop.
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 from devagent.tools.registry import ToolRegistry

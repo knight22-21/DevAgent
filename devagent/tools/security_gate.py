@@ -17,11 +17,10 @@ CLI can display a summary at session end.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from devagent.codeprism.client import CodePrismClient
-
 
 # Files that trigger CVE dependency scanning
 _DEP_FILES = re.compile(
@@ -149,17 +148,16 @@ def wrap_write_with_security(
                     f"  {reasons}\n"
                     "Proceed? [y/N]: "
                 )
-                if confirm_fn is not None:
-                    if not confirm_fn(warn_msg):
-                        log.append({
-                            "action": "REJECTED_BY_USER",
-                            "file": rel_path,
-                            "reasons": reasons,
-                        })
-                        return (
-                            f"[security_rejected] Write to {rel_path} cancelled by user.\n"
-                            f"Reason: {reasons}"
-                        )
+                if confirm_fn is not None and not confirm_fn(warn_msg):
+                    log.append({
+                        "action": "REJECTED_BY_USER",
+                        "file": rel_path,
+                        "reasons": reasons,
+                    })
+                    return (
+                        f"[security_rejected] Write to {rel_path} cancelled by user.\n"
+                        f"Reason: {reasons}"
+                    )
                 log.append({
                     "action": "WARN",
                     "file": rel_path,

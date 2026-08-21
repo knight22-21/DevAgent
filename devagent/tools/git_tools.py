@@ -8,7 +8,6 @@ on feature branches without the user having to pre-create them.
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 from devagent.tools.registry import ToolRegistry
 

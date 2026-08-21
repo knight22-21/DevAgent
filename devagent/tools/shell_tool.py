@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import re
 import subprocess
-from pathlib import Path
 
 from devagent.tools.registry import ToolRegistry
-
 
 # Commands / patterns that are never allowed
 _BLOCKLIST: list[re.Pattern] = [

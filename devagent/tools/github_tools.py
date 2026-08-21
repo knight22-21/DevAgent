@@ -389,7 +389,7 @@ def register_github_tools(registry: ToolRegistry, token: str) -> None:
             return "[error] repo, branch, and sha are required"
         try:
             owner, repo_name = _split_repo(repo)
-            d = gh.post(f"/repos/{owner}/{repo_name}/git/refs", {
+            gh.post(f"/repos/{owner}/{repo_name}/git/refs", {
                 "ref": f"refs/heads/{branch}",
                 "sha": sha,
             })

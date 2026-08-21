@@ -19,7 +19,6 @@ Tool taxonomy:
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from devagent.codeprism.client import CodePrismClient
 from devagent.tools.registry import ToolRegistry
@@ -381,8 +380,10 @@ def register_codeprism_tools(registry: ToolRegistry, client: CodePrismClient) ->
 def _fmt_context(r: dict) -> str:
     sym = r.get("symbol", {})
     lines = [
-        f"Symbol: {sym.get('name', '?')} [{sym.get('kind', '?')}]  "
-        f"line {sym.get('line', '?')}  {'(public)' if sym.get('is_public') else '(private)'}",
+        (
+            f"Symbol: {sym.get('name', '?')} [{sym.get('kind', '?')}]  "
+            f"line {sym.get('line', '?')}  {'(public)' if sym.get('is_public') else '(private)'}"
+        ),
         f"Signature: {sym.get('signature', '(none)')}",
         f"Estimated tokens if read raw: ~{r.get('estimated_tokens', '?')}",
     ]
@@ -398,7 +399,7 @@ def _fmt_context(r: dict) -> str:
             lines.append(f"  {s['file']}:{s.get('line', '?')}  {s['name']}")
     types = r.get("related_types", [])
     if types:
-        lines.append(f"\nRelated types: " + ", ".join(s["name"] for s in types[:5]))
+        lines.append("\nRelated types: " + ", ".join(s["name"] for s in types[:5]))
     return "\n".join(lines)
 
 
@@ -417,7 +418,7 @@ def _fmt_impact(r: dict) -> str:
             lines.append(f"  {s['file']}:{s.get('line', '?')}  {s['name']}")
     tests = r.get("affected_test_files", [])
     if tests:
-        lines.append(f"\nAffected tests: " + ", ".join(tests[:5]))
+        lines.append("\nAffected tests: " + ", ".join(tests[:5]))
     trans = r.get("transitive_dependents", [])
     if trans:
         shown = trans[:4]

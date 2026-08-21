@@ -6,10 +6,10 @@ Tool definitions (for the LLM) are generated from registered entries.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from devagent.core.llm import ToolDef
-
 
 ToolHandler = Callable[[dict[str, Any]], str]
 
@@ -62,9 +62,9 @@ def build_registry(
     github_token:     enables all gh_* GitHub API tools.
     """
     from devagent.tools.file_tools import register_file_tools
-    from devagent.tools.shell_tool import register_shell_tool
-    from devagent.tools.search_tools import register_search_tools
     from devagent.tools.git_tools import register_git_tools
+    from devagent.tools.search_tools import register_search_tools
+    from devagent.tools.shell_tool import register_shell_tool
 
     registry = ToolRegistry()
     register_file_tools(registry, project_root)

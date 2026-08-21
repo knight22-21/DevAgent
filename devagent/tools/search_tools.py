@@ -9,7 +9,6 @@ from pathlib import Path
 
 from devagent.tools.registry import ToolRegistry
 
-
 _SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache"}
 
 
@@ -153,7 +152,7 @@ def _python_grep(
 
         try:
             lines = filepath.read_text(encoding="utf-8", errors="replace").splitlines()
-        except Exception:
+        except Exception:  # noqa: S112
             continue
 
         rel = filepath.relative_to(root).as_posix()
