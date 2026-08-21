@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
@@ -15,7 +15,6 @@ from devagent.core.models import (
     WatcherAnalysis,
 )
 from devagent.core.storage import get_watcher_db_path
-
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS watched_repos (
@@ -95,7 +94,7 @@ async def register_repo(
     owner: str, repo: str, interval_minutes: int, labels: list[str]
 ) -> WatchedRepo:
     """Inserts or updates a watched repo record. Idempotent."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     filters_json = json.dumps(labels)
 
     async with aiosqlite.connect(_db_path()) as db:
@@ -232,12 +231,11 @@ async def get_all_analyses_for_repo(owner: str, repo: str) -> list[WatcherAnalys
 
 async def get_analysed_issue_numbers(owner: str, repo: str) -> set[int]:
     """Returns the set of issue numbers already analysed."""
-    async with aiosqlite.connect(_db_path()) as db:
-        async with db.execute(
-            "SELECT issue_number FROM watcher_analyses WHERE owner=? AND repo=?",
-            (owner, repo),
-        ) as cursor:
-            rows = await cursor.fetchall()
+    async with aiosqlite.connect(_db_path()) as db, db.execute(
+        "SELECT issue_number FROM watcher_analyses WHERE owner=? AND repo=?",
+        (owner, repo),
+    ) as cursor:
+        rows = await cursor.fetchall()
     return {r[0] for r in rows}
 
 
@@ -246,7 +244,7 @@ async def save_cross_conflicts(conflicts: list[CrossIssueConflict]) -> None:
     if not conflicts:
         return
 
-    owner = conflicts[0].file_path  # We get owner/repo from the conflict list itself
+    owner = conflicts[0].file_path  # noqa: F841  # We get owner/repo from the conflict list itself
     # Actually we need owner/repo passed in. Let's grab from first conflict's issue_titles context.
     # The conflict has issue_numbers but not owner/repo. We need to infer from caller.
     # Design decision: caller must delete+insert. We'll do bulk delete by owner/repo.
@@ -254,7 +252,6 @@ async def save_cross_conflicts(conflicts: list[CrossIssueConflict]) -> None:
     # The caller (scheduler) will call this function with the specific repo's conflicts.
     # We'll add a helper: save_cross_conflicts_for_repo(owner, repo, conflicts).
     # For now, this function is unused — use save_cross_conflicts_for_repo below.
-    pass
 
 
 async def save_cross_conflicts_for_repo(
@@ -324,7 +321,7 @@ async def log_check_run(
                 cross_conflicts_count, duration_seconds)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (owner, repo, datetime.now(timezone.utc).isoformat(), new_issues, conflicts, duration),
+            (owner, repo, datetime.now(UTC).isoformat(), new_issues, conflicts, duration),
         )
         await db.commit()
 

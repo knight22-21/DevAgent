@@ -9,7 +9,6 @@ from rich.text import Text
 
 from devagent.core.models import GapReport, RequirementAnalysis
 
-
 console = Console()
 
 

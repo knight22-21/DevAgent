@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from devagent.codeprism.client import CodePrismClient
 
-
 _HEADER = "\n\n## This Session (CodePrism graph context)\n"
 _FOOTER = (
     "\nPrefer cp_get_context / cp_search_symbol over read_file "

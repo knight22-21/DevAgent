@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from devagent.core.models import CrossIssueConflict, WatcherAnalysis
 
@@ -38,7 +38,7 @@ class CrossIssueConflictDetector:
                 issue_numbers=[a.issue_number for a in touching],
                 issue_titles={a.issue_number: a.issue_title for a in touching},
                 severity=severity,
-                detected_at=datetime.now(timezone.utc),
+                detected_at=datetime.now(UTC),
             )
             conflicts.append(conflict)
 
@@ -68,12 +68,11 @@ class CrossIssueConflictDetector:
         extension_count = 0
         for analysis in touching_analyses:
             for req_summary in analysis.requirement_summaries:
-                if file_path in req_summary.get("files", []):
-                    if req_summary.get("status") in (
-                        "PARTIALLY_EXISTS", "EXTEND", "CONFLICTED"
-                    ):
-                        extension_count += 1
-                        break
+                if file_path in req_summary.get("files", []) and req_summary.get("status") in (
+                    "PARTIALLY_EXISTS", "EXTEND", "CONFLICTED"
+                ):
+                    extension_count += 1
+                    break
 
         if extension_count >= 2:
             return "medium"

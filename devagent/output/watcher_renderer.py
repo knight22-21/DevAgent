@@ -8,10 +8,9 @@ from rich.panel import Panel
 from rich.table import Table
 
 from devagent.core.models import (
-    CrossIssueConflict,
     IssueComplexity,
-    WatchHealthReport,
     WatcherAnalysis,
+    WatchHealthReport,
 )
 
 console = Console()

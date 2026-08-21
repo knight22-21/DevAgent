@@ -6,8 +6,7 @@ table. Ollama (local) is free — cost is always 0.0 for local models.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Price table  (USD per 1M tokens: input / output)

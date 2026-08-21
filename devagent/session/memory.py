@@ -11,7 +11,6 @@ from typing import Any
 
 from devagent.session import store
 
-
 _SYSTEM_BLOCK_HEADER = "\n\n## Session Memory\n"
 _ITEM_PREFIX = "- "
 

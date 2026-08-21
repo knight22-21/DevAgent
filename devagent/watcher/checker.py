@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from devagent.core.config import DevAgentConfig
 from devagent.core.models import IssueComplexity, WatchedRepo, WatcherAnalysis
@@ -42,7 +42,7 @@ class WatcherChecker:
 
             if not new_issues:
                 await update_last_checked(
-                    watched_repo.owner, watched_repo.repo, datetime.now(timezone.utc)
+                    watched_repo.owner, watched_repo.repo, datetime.now(UTC)
                 )
                 return []
 
@@ -61,7 +61,7 @@ class WatcherChecker:
                         progress_callback(issue["number"], issue["title"], "done")
 
             await update_last_checked(
-                watched_repo.owner, watched_repo.repo, datetime.now(timezone.utc)
+                watched_repo.owner, watched_repo.repo, datetime.now(UTC)
             )
 
             duration = time.monotonic() - start_time
@@ -174,7 +174,7 @@ class WatcherChecker:
             issue_number=num,
             issue_title=issue["title"],
             issue_url=issue_url,
-            analysed_at=datetime.now(timezone.utc),
+            analysed_at=datetime.now(UTC),
             requirements_count=1,
             conflicts_count=0,
             complexity=complexity,

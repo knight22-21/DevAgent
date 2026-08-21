@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Background event loop (started once per process)
@@ -113,7 +113,7 @@ class CodePrismClient:
         self.project_root = Path(project_root).resolve()
         self._prism = None
         self._session_obj = None
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
         self._ready = False   # True after first _ensure_ready()
         self._indexed = False  # True if .codeprism/codeprism.db exists
 
@@ -142,7 +142,7 @@ class CodePrismClient:
             if self._session_id:
                 self._session_obj = self._prism.session(self._session_id)
             return True
-        except Exception as exc:
+        except Exception:
             self._ready = True
             self._indexed = False
             return False
@@ -233,7 +233,7 @@ class CodePrismClient:
             return {"error": str(exc)}
 
     # Search
-    def search_symbol(self, query: str, kind: Optional[str] = None) -> dict:
+    def search_symbol(self, query: str, kind: str | None = None) -> dict:
         if not self._ensure_ready():
             return self._not_indexed()
         try:

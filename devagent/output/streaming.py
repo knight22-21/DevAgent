@@ -7,7 +7,7 @@ them using Rich panels, spinners, and syntax highlighting.
 from __future__ import annotations
 
 import json
-from typing import Generator
+from collections.abc import Generator
 
 from rich.console import Console
 from rich.markdown import Markdown

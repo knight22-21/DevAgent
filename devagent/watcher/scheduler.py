@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from devagent.core.config import DevAgentConfig
-from devagent.core.models import WatchHealthReport, WatchedRepo
+from devagent.core.models import WatchedRepo, WatchHealthReport
 from devagent.output.watcher_renderer import render_health_report
 from devagent.watcher.checker import WatcherChecker
 from devagent.watcher.conflict_detector import CrossIssueConflictDetector
@@ -126,7 +126,7 @@ class WatcherScheduler:
         health_report = WatchHealthReport(
             owner=watched_repo.owner,
             repo=watched_repo.repo,
-            check_run_at=datetime.now(timezone.utc),
+            check_run_at=datetime.now(UTC),
             new_issues_count=len(new_analyses),
             new_analyses=new_analyses,
             cross_issue_conflicts=conflicts,
