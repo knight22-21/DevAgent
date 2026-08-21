@@ -1815,8 +1815,17 @@ def doctor() -> None:
             "âœ…" if ok else "âŒ",
             msg,
         )
+        # Offline capability row
+        offline_capable = cfg.llm.provider == "ollama"
+        table.add_row(
+            "Offline Mode",
+            "âœ…" if offline_capable else "☁️",
+            "local (offline capable)" if offline_capable
+            else f"cloud — requires internet ({cfg.llm.provider})",
+        )
     else:
         table.add_row("LLM Provider", "âŒ", "No config")
+        table.add_row("Offline Mode", "âŒ", "No config")
 
     # 3. GitHub token
     if cfg and cfg.github.token:
