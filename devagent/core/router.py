@@ -28,6 +28,7 @@ class MultiModelRouter:
 
     def __init__(self, config: DevAgentConfig) -> None:
         self._config = config
+        self._cache: dict[str, LLMClient] = {}
 
     def detect_task(self, last_tool_names: list[str], iteration: int) -> str:
         """Return a task key: planning | coding | reviewing | cheap | fallback."""
@@ -43,8 +44,10 @@ class MultiModelRouter:
         return "fallback"
 
     def get_llm(self, task: str = "fallback") -> LLMClient:
-        from devagent.core.llm import get_llm_for_task
-        return get_llm_for_task(self._config, task)
+        if task not in self._cache:
+            from devagent.core.llm import get_llm_for_task
+            self._cache[task] = get_llm_for_task(self._config, task)
+        return self._cache[task]
 
     def get_llm_for_iteration(
         self,
