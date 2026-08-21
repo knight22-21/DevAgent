@@ -39,6 +39,7 @@ except ImportError:
 
 
 MAX_ITERATIONS = 30  # hard safety cap
+MAX_REPAIR = 3       # max consecutive auto-test retries after a write
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +109,9 @@ AgentEvent = (
     | ErrorEvent
 )
 
+# Tool names that trigger the auto-test repair loop
+_WRITE_TOOL_NAMES = {"write_file", "edit_file"}
+
 
 # ---------------------------------------------------------------------------
 # Agent loop
@@ -135,6 +139,7 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self._cp_client = codeprism_client
         self._router = router
+        self._repair_attempt = 0  # consecutive test-repair attempts after a write
 
     def run(self, user_message: str) -> Generator[AgentEvent, None, None]:
         """Drive one user turn through the ReAct loop.
@@ -238,6 +243,14 @@ class AgentLoop:
                     yield ToolCallEvent(id=tc.id, name=tc.name, args=tc.args)
 
                     result = self.registry.call(tc.name, tc.args)
+
+                    # Auto-test repair loop: after every file write, run relevant tests
+                    if tc.name in _WRITE_TOOL_NAMES:
+                        file_path = tc.args.get("path", tc.args.get("file_path", ""))
+                        test_note = self._auto_test_after_write(file_path)
+                        if test_note:
+                            result = result + test_note
+
                     success = not result.startswith("[error]") and not result.startswith("[blocked]")
 
                     yield ToolResultEvent(id=tc.id, name=tc.name, result=result, success=success)
@@ -270,3 +283,59 @@ class AgentLoop:
 
         # Exceeded max iterations
         yield ErrorEvent(f"Agent loop exceeded {MAX_ITERATIONS} iterations without finishing")
+
+    # ------------------------------------------------------------------
+    # Test-driven repair helpers
+    # ------------------------------------------------------------------
+
+    def _auto_test_after_write(self, file_path: str) -> str:
+        """Run relevant tests after a write. Returns a note to append to the tool result.
+
+        Returns empty string if CodePrism is unavailable, no test file found,
+        or the repair limit has been reached.
+        """
+        if not self._cp_client or not file_path:
+            return ""
+        if self._repair_attempt >= MAX_REPAIR:
+            return ""
+
+        try:
+            summary = self._cp_client.get_module_summary(file_path)
+        except Exception:
+            return ""
+
+        test_file = summary.get("test_coverage_file", "")
+        if not test_file:
+            return ""
+
+        test_result = self.registry.call(
+            "run_shell",
+            {"command": f"python -m pytest {test_file} -x -q --tb=short 2>&1"},
+        )
+
+        low = test_result.lower()
+        passed = "passed" in low and "failed" not in low and "error" not in low
+
+        if passed:
+            self._repair_attempt = 0
+            return f"\n\n[auto_test] {test_file}: all tests pass."
+
+        self._repair_attempt += 1
+        remaining = MAX_REPAIR - self._repair_attempt
+        note = (
+            f"\n\n[auto_test] Tests failed after your edit "
+            f"(attempt {self._repair_attempt}/{MAX_REPAIR}):\n"
+            f"Test file: {test_file}\n"
+            f"Output:\n{test_result[:600]}"
+        )
+        if remaining > 0:
+            note += (
+                f"\n\nPlease fix the failing tests. "
+                f"{remaining} auto-repair attempt(s) remaining."
+            )
+        else:
+            note += (
+                "\n\n[WARNING] Max repair attempts reached. "
+                "Proceeding — manual review recommended."
+            )
+        return note
