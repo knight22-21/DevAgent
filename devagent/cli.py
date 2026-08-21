@@ -1862,5 +1862,27 @@ def doctor() -> None:
     console.print()
 
 
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
+    port: int = typer.Option(7331, "--port", "-p", help="Port to listen on"),
+    ui: bool = typer.Option(False, "--ui", help="Open graph visualisation UI (stub: not yet bundled)"),
+    project: Optional[str] = typer.Option(None, "--project", help="Project path"),
+) -> None:
+    """Start the DevAgent REST API server (port 7331 by default)."""
+    from devagent.server.app import serve as _serve
+    from devagent.core.project import detect_project_root
+
+    cfg = load_config() if config_exists() else None
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        _serve(host=host, port=port, config=cfg, project_root=project_root, open_ui=ui)
+    except OSError as exc:
+        console.print(f"[red]Could not start server: {exc}[/red]")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()
