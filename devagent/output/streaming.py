@@ -20,6 +20,7 @@ from devagent.agent.loop import (
     BudgetWarningEvent,
     ErrorEvent,
     FinalAnswerEvent,
+    StatusEvent,
     ThinkingEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -46,6 +47,8 @@ def render_events(events: Generator[AgentEvent, None, None]) -> str:
             final_text = event.text
         elif isinstance(event, BudgetWarningEvent):
             _render_budget_warning(event)
+        elif isinstance(event, StatusEvent):
+            _render_status(event)
         elif isinstance(event, ErrorEvent):
             _render_error(event)
     return final_text
@@ -122,6 +125,12 @@ def _render_budget_warning(event: BudgetWarningEvent) -> None:
             style="yellow",
         )
     )
+
+
+def _render_status(event: StatusEvent) -> None:
+    """Render the live status bar after each LLM call."""
+    task_tag = f"  [{event.task}]" if event.task and event.task != "fallback" else ""
+    console.print(Text(f"  {event.status_line}{task_tag}", style="dim"))
 
 
 def _render_error(event: ErrorEvent) -> None:
