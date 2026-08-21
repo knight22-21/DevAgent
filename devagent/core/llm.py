@@ -13,11 +13,11 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 from devagent.core.config import DevAgentConfig, LLMConfig
-
 
 # ---------------------------------------------------------------------------
 # Shared types

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
+
 class InvalidGitHubURLError(Exception):
     def __init__(self, url: str, reason: str):
         self.url = url

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 # Markers that indicate a project root directory
 PROJECT_MARKERS = [".git", "pyproject.toml", "setup.py", "package.json"]
 

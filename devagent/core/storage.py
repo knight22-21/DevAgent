@@ -12,7 +12,6 @@ from pathlib import Path
 
 import platformdirs
 
-
 APP_NAME = "devagent"
 
 
@@ -161,7 +160,7 @@ async def get_changed_files_count(project_root: Path, sqlite_path: Path) -> dict
 
     # Load indexed files
     indexed: dict[str, float] = {}
-    async with aiosqlite.connect(sqlite_path) as db:
+    async with aiosqlite.connect(sqlite_path) as db:  # noqa: SIM117
         async with db.execute("SELECT file_path, last_modified FROM indexed_files") as cursor:
             async for row in cursor:
                 indexed[row[0]] = row[1]
@@ -170,7 +169,7 @@ async def get_changed_files_count(project_root: Path, sqlite_path: Path) -> dict
     gitignore_path = project_root / ".gitignore"
     gitignore_spec = None
     if gitignore_path.exists():
-        with open(gitignore_path, "r", encoding="utf-8") as f:
+        with open(gitignore_path, "r", encoding="utf-8") as f:  # noqa: ASYNC230
             lines = f.readlines()
         gitignore_spec = _pathspec.PathSpec.from_lines(_pathspec.patterns.GitWildMatchPattern, lines)
 

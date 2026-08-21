@@ -7,8 +7,7 @@ All config models are Pydantic models with sensible defaults.
 from __future__ import annotations
 
 import tomllib
-from pathlib import Path
-from typing import Literal, Optional, Dict
+from typing import Literal
 
 import tomli_w
 from pydantic import BaseModel
@@ -30,7 +29,7 @@ class LLMConfig(BaseModel):
     base_url: str = "http://localhost:11434"
     temperature: float = 0.1
     api_key: str = ""
-    fallback: Optional[LLMFallbackConfig] = None
+    fallback: LLMFallbackConfig | None = None
 
 
 class GitHubConfig(BaseModel):
@@ -69,11 +68,11 @@ class WatcherConfig(BaseModel):
 
 class RouterConfig(BaseModel):
     """Multi-model routing: maps task type → (provider, model) pair."""
-    planning: Dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:14b"}
-    coding: Dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:7b"}
-    reviewing: Dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:7b"}
-    cheap: Dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:3b"}
-    fallback: Dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:7b"}
+    planning: dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:14b"}
+    coding: dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:7b"}
+    reviewing: dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:7b"}
+    cheap: dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:3b"}
+    fallback: dict[str, str] = {"provider": "ollama", "model": "qwen2.5-coder:7b"}
 
 
 class AgentConfig(BaseModel):

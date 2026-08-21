@@ -11,7 +11,7 @@ Router logic (matches roadmap Phase 5 spec, wired in Phase 1 fix):
 from __future__ import annotations
 
 from devagent.core.config import DevAgentConfig
-from devagent.core.llm import LLMClient, LLMConfig
+from devagent.core.llm import LLMClient
 
 # Tool name sets for task detection
 _WRITE_TOOLS   = {"write_file", "edit_file"}
