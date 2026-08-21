@@ -1473,13 +1473,8 @@ def run(
     ),
 ) -> None:
     """Start an interactive agent session (the main DevAgent command)."""
-    from devagent.agent.loop import AgentLoop
-    from devagent.agent.system_prompt import build_system_prompt
+    from devagent.agent.flows import DevAgentSession
     from devagent.core.project import detect_project_root
-    from devagent.output.streaming import render_events
-    from devagent.session.budget import TokenBudget
-    from devagent.session.manager import SessionManager
-    from devagent.session.memory import MemoryBlock
 
     if not config_exists():
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
@@ -1491,163 +1486,151 @@ def run(
 
     project_root, _ = detect_project_root(Path(project) if project else None)
 
-    from devagent.core.llm import LLMClient
-    llm = LLMClient(cfg.llm)
-
-    mgr = SessionManager()
+    try:
+        session = DevAgentSession(
+            cfg,
+            project_root,
+            max_tokens=max_tokens,
+            resume_id=resume,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        _handle_error(exc)
+        return
 
     if resume:
-        sessions = mgr.list(limit=200)
-        match = next((s for s in sessions if s["id"].startswith(resume)), None)
-        if not match:
-            console.print(f"[red]Session not found: {resume}[/red]")
-            raise typer.Exit(1)
-        session_id = match["id"]
-        console.print(f"[dim]Resuming session: {match['title']} ({session_id[:8]})[/dim]\n")
+        console.print(f"[dim]Resuming session: {session.session_id[:8]}[/dim]")
     else:
-        session_id = mgr.new(
-            project=str(project_root),
-            model=cfg.llm.model,
-            provider=cfg.llm.provider,
-        )
-        console.print(f"[dim]New session: {session_id[:8]}[/dim]\n")
+        console.print(f"[dim]New session: {session.session_id[:8]}[/dim]")
 
-    # ── CodePrism client (optional — graceful degradation if not indexed) ──
-    cp_client = None
-    try:
-        from devagent.codeprism.client import CodePrismClient
-        cp_client = CodePrismClient(str(project_root))
-        if cp_client.is_indexed:
-            cp_client.attach_session(session_id)
-            console.print("[dim]CodePrism graph: active[/dim]")
-        else:
-            console.print(
-                f"[dim]CodePrism graph: not indexed "
-                f"(run: codeprism index {project_root})[/dim]"
-            )
-            cp_client = None
-    except Exception:
-        cp_client = None
-
-    # ── Security gate setup ───────────────────────────────────────────────
-    security_log: list = []
-
-    def _security_confirm(warning_msg: str) -> bool:
-        console.print(f"\n[yellow]{warning_msg}[/yellow]")
-        return Confirm.ask("Proceed with write?", default=False)
-
-    from devagent.tools.registry import build_registry
-    registry = build_registry(
-        project_root=str(project_root),
-        codeprism_client=cp_client,
-        security_log=security_log,
-        confirm_fn=_security_confirm if cp_client else None,
-    )
-
-    # ── MultiModelRouter (optional — graceful degradation) ───────────────
-    router = None
-    try:
-        from devagent.core.router import MultiModelRouter
-        router = MultiModelRouter(cfg)
-        console.print("[dim]Multi-model router: active[/dim]")
-    except Exception:
-        pass
-
-    budget = TokenBudget(
-        max_tokens=max_tokens,
-        warn_at_percent=cfg.budget.warn_at_percent,
-    )
-    memory = MemoryBlock(session_id)
-    system_prompt = build_system_prompt(project_description=f"Project: {project_root.name}")
-
-    loop = AgentLoop(
-        llm=llm,
-        registry=registry,
-        session_mgr=mgr,
-        session_id=session_id,
-        memory=memory,
-        budget=budget,
-        system_prompt=system_prompt,
-        codeprism_client=cp_client,
-        router=router,
-    )
-
-    console.print(
-        Panel(
-            f"[bold cyan]DevAgent[/bold cyan]  |  {cfg.llm.provider}/{cfg.llm.model}\n"
-            f"[dim]Project: {project_root}[/dim]\n"
-            "[dim]Type your message and press Enter. Ctrl+C to exit.[/dim]\n"
-            "[dim]Commands: /memory  /tokens  /security  /exit[/dim]",
-            border_style="cyan",
-        )
-    )
-
-    # Set a useful session title from the first user message
-    title_set = resume is not None
-
-    def _print_session_end() -> None:
-        console.print(f"\n[dim]{budget.status_line()}[/dim]")
-        # Security report at session end (only if there were security events)
-        if security_log:
-            from devagent.tools.security_gate import format_security_report
-            console.print()
-            console.print(
-                Panel(format_security_report(security_log), title="Security Gate Report", border_style="yellow")
-            )
+    session.print_header("DevAgent")
 
     try:
-        while True:
-            try:
-                user_input = console.input("[bold cyan]>[/bold cyan] ").strip()
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[dim]Session ended.[/dim]")
-                _print_session_end()
-                break
+        session.interactive_repl()
+    except Exception as exc:
+        _handle_error(exc)
 
-            if not user_input:
-                continue
 
-            if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
-                console.print("[dim]Session ended.[/dim]")
-                _print_session_end()
-                break
+# ---------------------------------------------------------------------------
+# Phase 4 flow commands
+# ---------------------------------------------------------------------------
 
-            if user_input.lower() == "/memory":
-                mem = memory.all()
-                if mem:
-                    for k, v in mem.items():
-                        console.print(f"  [bold]{k}[/bold]: {v}")
-                else:
-                    console.print("[dim]No memory items.[/dim]")
-                continue
+@app.command()
+def implement(
+    url: str = typer.Argument(..., help="GitHub issue URL (https://github.com/owner/repo/issues/N)"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+) -> None:
+    """Fetch a GitHub issue and implement it end-to-end (branch → edit → test → PR)."""
+    from devagent.agent.flows import run_implement
+    from devagent.core.project import detect_project_root
 
-            if user_input.lower() == "/tokens":
-                console.print(f"  [dim]{budget.status_line()}[/dim]")
-                per_model = budget.per_model_summary()
-                if per_model:
-                    for row in per_model:
-                        console.print(
-                            f"    {row['provider']}/{row['model']}: "
-                            f"{row['input_tokens']:,}in / {row['output_tokens']:,}out  "
-                            f"${row['cost_usd']:.4f}  ({row['calls']} calls)"
-                        )
-                continue
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
 
-            if user_input.lower() == "/security":
-                from devagent.tools.security_gate import format_security_report
-                console.print(
-                    Panel(format_security_report(security_log), title="Security Gate", border_style="yellow")
-                )
-                continue
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+    project_root, _ = detect_project_root(Path(project) if project else None)
 
-            if not title_set:
-                title = user_input[:60]
-                mgr.set_title(session_id, title)
-                title_set = True
+    try:
+        run_implement(cfg, project_root, url, max_tokens=max_tokens)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        _handle_error(exc)
 
-            events = loop.run(user_input)
-            render_events(events)
 
+@app.command()
+def review(
+    url: str = typer.Argument(..., help="GitHub PR URL (https://github.com/owner/repo/pull/N)"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+) -> None:
+    """Fetch a GitHub PR diff and post an AI code review with inline comments."""
+    from devagent.agent.flows import run_review
+    from devagent.core.project import detect_project_root
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        run_review(cfg, project_root, url, max_tokens=max_tokens)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@app.command()
+def triage(
+    repo: str = typer.Argument(..., help="GitHub repo as owner/repo or full URL"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+) -> None:
+    """Classify open GitHub issues by effort and post triage comments."""
+    from devagent.agent.flows import run_triage
+    from devagent.core.project import detect_project_root
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        run_triage(cfg, project_root, repo, max_tokens=max_tokens)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@app.command("fix-ci")
+def fix_ci(
+    url: str = typer.Argument(
+        ..., help="GitHub Actions run URL (https://github.com/owner/repo/actions/runs/ID)"
+    ),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project path"),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+) -> None:
+    """Read failed CI logs and propose/apply a fix."""
+    from devagent.agent.flows import run_fix_ci
+    from devagent.core.project import detect_project_root
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        run_fix_ci(cfg, project_root, url, max_tokens=max_tokens)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     except Exception as exc:
         _handle_error(exc)
 
