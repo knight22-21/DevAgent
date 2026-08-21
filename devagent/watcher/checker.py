@@ -106,34 +106,80 @@ class WatcherChecker:
         watched_repo: WatchedRepo,
         issue: dict,
     ) -> WatcherAnalysis | None:
-        # Record issue with minimal metadata.
-        # Full LLM analysis (impact, requirements, conflicts) returns in Phase 5
-        # when the agent loop is integrated into the watcher.
+        """Run a one-shot agent analysis for a single issue."""
+        import asyncio
+        loop = asyncio.get_running_loop()
         try:
-            num = issue["number"]
-            return WatcherAnalysis(
-                owner=watched_repo.owner,
-                repo=watched_repo.repo,
-                issue_number=num,
-                issue_title=issue["title"],
-                issue_url=issue.get(
-                    "url",
-                    f"https://github.com/{watched_repo.owner}/{watched_repo.repo}/issues/{num}",
-                ),
-                analysed_at=datetime.now(timezone.utc),
-                requirements_count=0,
-                conflicts_count=0,
-                complexity=IssueComplexity.LOW,
-                touched_files=[],
-                conflicted_files=[],
-                requirement_summaries=[],
-                full_report_available=False,
+            return await loop.run_in_executor(
+                None,
+                self._agent_analyse_issue,
+                watched_repo,
+                issue,
             )
-        except Exception as e:
+        except Exception as exc:
             import logging
             logging.getLogger(__name__).warning(
                 "watcher_analysis_failed issue=%s error=%s",
                 issue.get("number"),
-                str(e),
+                str(exc),
             )
             return None
+
+    def _agent_analyse_issue(
+        self,
+        watched_repo: WatchedRepo,
+        issue: dict,
+    ) -> WatcherAnalysis:
+        """Sync agent analysis — runs in a thread via run_in_executor."""
+        from devagent.agent.flows import DevAgentSession
+
+        num = issue["number"]
+        issue_url = issue.get(
+            "html_url",
+            f"https://github.com/{watched_repo.owner}/{watched_repo.repo}/issues/{num}",
+        )
+        body_preview = (issue.get("body") or "")[:1000]
+
+        prompt = (
+            f"Analyze GitHub issue #{num}: {issue['title']}\n\n"
+            f"Repository: {watched_repo.owner}/{watched_repo.repo}\n"
+            f"Body:\n{body_preview}\n\n"
+            "Provide a concise analysis:\n"
+            "1. Effort estimate (trivial / small / medium / large)\n"
+            "2. Key files or modules likely affected\n"
+            "3. Implementation approach in 2-3 sentences\n"
+            "4. Any risks or blockers\n\n"
+            "Use CodePrism tools if the project is indexed to identify affected areas. "
+            "Keep the total response under 300 words."
+        )
+
+        try:
+            session = DevAgentSession(self.config, self.project_root)
+            analysis_text = session.run_message(prompt, quiet=True)
+        except Exception as exc:
+            analysis_text = f"(agent analysis unavailable: {exc})"
+
+        # Heuristic complexity from analysis text
+        low = analysis_text.lower()
+        if any(w in low for w in ["large", "significant", "major", "complex", ">2d", "2+ days"]):
+            complexity = IssueComplexity.HIGH
+        elif any(w in low for w in ["medium", "moderate", "1-2 day", "half day", "small"]):
+            complexity = IssueComplexity.MEDIUM
+        else:
+            complexity = IssueComplexity.LOW
+
+        return WatcherAnalysis(
+            owner=watched_repo.owner,
+            repo=watched_repo.repo,
+            issue_number=num,
+            issue_title=issue["title"],
+            issue_url=issue_url,
+            analysed_at=datetime.now(timezone.utc),
+            requirements_count=1,
+            conflicts_count=0,
+            complexity=complexity,
+            touched_files=[],
+            conflicted_files=[],
+            requirement_summaries=[analysis_text[:500]],
+            full_report_available=True,
+        )
