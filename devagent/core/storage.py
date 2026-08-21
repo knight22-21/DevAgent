@@ -232,6 +232,16 @@ def clear_project_index(project_root: Path) -> None:
 # F3 — Watcher path helpers
 # ---------------------------------------------------------------------------
 
+def get_sessions_db_path() -> Path:
+    """Returns path to the global agent sessions SQLite database.
+
+    data_dir/sessions/sessions.db
+    """
+    p = get_data_dir() / "sessions" / "sessions.db"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def get_watcher_db_path() -> Path:
     """Returns path to the watcher SQLite database.
 
