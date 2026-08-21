@@ -55,14 +55,13 @@ class GitHubClient:
         owner: str,
         repo: str,
         state: str = "open",
-        since: "datetime | None" = None,
-        labels: "list[str] | None" = None,
+        since: datetime | None = None,
+        labels: list[str] | None = None,
     ) -> list[dict]:
         """Lists issues for a repo. Returns list of issue dicts.
 
         Each dict has: number, title, body, url, labels, state, created_at, updated_at
         """
-        from datetime import datetime
         args: dict = {"owner": owner, "repo": repo, "state": state}
         if since:
             args["since"] = since.isoformat()

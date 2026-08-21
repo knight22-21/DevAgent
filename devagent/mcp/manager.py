@@ -11,7 +11,6 @@ import subprocess
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -28,7 +27,6 @@ from devagent.mcp.clients.spec_analysis_client import SpecAnalysisClient
 
 class NodeNotFoundError(Exception):
     """Raised when Node.js is not found in PATH."""
-    pass
 
 
 class MCPManager:
@@ -57,7 +55,7 @@ class MCPManager:
                 "Please download and install Node.js from https://nodejs.org/"
             )
 
-    async def __aenter__(self) -> MCPManager:
+    async def __aenter__(self) -> MCPManager:  # noqa: PYI034
         self._check_node()
         
         env = os.environ.copy()
@@ -129,5 +127,5 @@ class MCPManager:
 
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         await self._exit_stack.aclose()

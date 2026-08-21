@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from devagent.mcp.client import MCPClient
 
 

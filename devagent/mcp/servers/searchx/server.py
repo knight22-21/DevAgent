@@ -7,8 +7,6 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 from devagent.core.config import load_config
-from devagent.core.storage import get_config_path
-
 
 # Initialize FastMCP server
 mcp = FastMCP("SearchXMCP")
@@ -123,7 +121,7 @@ def searchx_web_search(query: str, count: int = 10):
         })
     except Exception as e:
         return json.dumps({
-            "error": f"Search failed: {str(e)}",
+            "error": f"Search failed: {e!s}",
             "results": []
         })
 

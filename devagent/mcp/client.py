@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from mcp import ClientSession
@@ -11,7 +10,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 class ToolCallError(Exception):
     """Raised when an MCP tool call fails."""
-    pass
 
 
 class MCPClient:
