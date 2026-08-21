@@ -184,6 +184,10 @@ class DevAgentSession:
         memory = MemoryBlock(session_id)
         self._memory = memory
 
+        # Memory tools — agent can explicitly store/recall facts across turns
+        from devagent.tools.memory_tools import register_memory_tools
+        register_memory_tools(registry, memory)
+
         system_prompt = build_system_prompt(
             project_description=f"Project: {self._project_root.name}",
             extra_context=extra_system,
@@ -212,9 +216,21 @@ class DevAgentSession:
     # Public API
     # ------------------------------------------------------------------
 
-    def run_message(self, message: str) -> str:
-        """Drive one user turn; render events. Returns the final LLM text."""
+    def run_message(self, message: str, quiet: bool = False) -> str:
+        """Drive one user turn; render events. Returns the final LLM text.
+
+        quiet=True suppresses all terminal output (used by background watcher).
+        """
+        from devagent.agent.loop import FinalAnswerEvent
         from devagent.output.streaming import render_events
+
+        if quiet:
+            final = ""
+            for event in self._loop.run(message):
+                if isinstance(event, FinalAnswerEvent):
+                    final = event.text
+            return final
+
         return render_events(self._loop.run(message))
 
     def interactive_repl(self, *, first_message: str | None = None) -> None:
@@ -281,10 +297,11 @@ class DevAgentSession:
         graph = "active" if self._cp_active else "not indexed"
         gh = "active" if self._gh_active else "no token"
         router = "active" if self._router_active else "off"
+        mode = "local (offline)" if self._cfg.llm.provider == "ollama" else f"cloud ({self._cfg.llm.provider})"
         self._console.print(
             Panel(
                 f"[bold cyan]{title}[/bold cyan]  |  "
-                f"{self._cfg.llm.provider}/{self._cfg.llm.model}\n"
+                f"{self._cfg.llm.provider}/{self._cfg.llm.model}  |  mode: {mode}\n"
                 f"[dim]Project: {self._project_root}[/dim]\n"
                 f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
                 "[dim]Commands: /memory  /tokens  /security  /exit[/dim]",
