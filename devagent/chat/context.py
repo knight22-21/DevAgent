@@ -1,5 +1,6 @@
 from devagent.core.models import GapReport
 
+
 def estimate_prompt_tokens(text: str) -> int:
     """Rough token estimator."""
     return len(text) // 4

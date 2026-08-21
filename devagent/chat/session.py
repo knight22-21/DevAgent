@@ -1,12 +1,14 @@
 import asyncio
+
 from rich.console import Console
-from rich.panel import Panel
 from rich.markdown import Markdown
-from devagent.chat.history import ConversationHistory
+from rich.panel import Panel
+
 from devagent.chat.context import build_system_prompt
-from devagent.core.models import GapReport
+from devagent.chat.history import ConversationHistory
 from devagent.core.config import DevAgentConfig
 from devagent.core.llm import get_llm
+from devagent.core.models import GapReport
 
 console = Console()
 
