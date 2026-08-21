@@ -1,37 +1,83 @@
-"""LLM provider factory — direct official SDKs, no framework wrapper.
+"""LLM provider factory -- direct official SDKs, no framework wrapper.
 
-Returns a unified LLMClient that the agent loop calls for completions.
-Supports: ollama, anthropic, openai, groq (openai-compatible), gemini.
+Two usage modes:
+  1. Simple chat: LLMClient.complete(messages) / acomplete(messages)
+  2. Agent loop:  LLMClient.complete_with_tools(agent_messages, tools)
+
+Supports: ollama, anthropic, openai, groq (openai-compat), gemini.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+import uuid
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Iterator
+from typing import Any, AsyncIterator
 
 from devagent.core.config import DevAgentConfig, LLMConfig
 
 
+# ---------------------------------------------------------------------------
+# Shared types
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Message:
-    role: str   # "system" | "user" | "assistant" | "tool"
+    """Simple message for non-agent chat (used by chat/ module)."""
+    role: str   # system | user | assistant
     content: str
+
+
+@dataclass
+class ToolCallRequest:
+    """A tool call requested by the LLM."""
+    id: str
+    name: str
+    args: dict[str, Any]
+
+
+@dataclass
+class AgentMessage:
+    """Richer message type for the agent loop -- supports tool calls and results."""
+    role: str  # system | user | assistant | tool_result
+    content: str = ""
+    # Populated when role == "assistant" and LLM chose to call tools
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    # Populated when role == "tool_result"
+    tool_call_id: str = ""
+    tool_name: str = ""
+    tool_success: bool = True
+
+
+@dataclass
+class ToolDef:
+    """A tool definition (JSON-Schema parameters, OpenAI-compatible)."""
+    name: str
+    description: str
+    parameters: dict  # JSON Schema object
 
 
 @dataclass
 class LLMResponse:
     content: str
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
     provider: str = ""
 
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
 
-class TokenBucket:
-    """Simple token-bucket rate limiter (kept for Groq free-tier)."""
 
+# ---------------------------------------------------------------------------
+# Rate limiter (Groq free tier)
+# ---------------------------------------------------------------------------
+
+class _TokenBucket:
     def __init__(self, tokens_per_minute: int):
         self.capacity = tokens_per_minute
         self.tokens = float(tokens_per_minute)
@@ -62,8 +108,116 @@ class TokenBucket:
             await asyncio.sleep(1 / self.fill_rate)
 
 
-_groq_limiter = TokenBucket(30)
+_groq_limiter = _TokenBucket(30)
 
+
+# ---------------------------------------------------------------------------
+# Provider-specific message format converters
+# ---------------------------------------------------------------------------
+
+def _to_openai_messages(messages: list[AgentMessage]) -> list[dict]:
+    result = []
+    for msg in messages:
+        if msg.role == "tool_result":
+            result.append({
+                "role": "tool",
+                "tool_call_id": msg.tool_call_id,
+                "name": msg.tool_name,
+                "content": msg.content,
+            })
+        elif msg.role == "assistant" and msg.tool_calls:
+            result.append({
+                "role": "assistant",
+                "content": msg.content or None,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.args),
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+        else:
+            result.append({"role": msg.role, "content": msg.content})
+    return result
+
+
+def _to_anthropic_messages(messages: list[AgentMessage]) -> list[dict]:
+    """Convert to Anthropic format (strict user/assistant alternation,
+    tool results bundled into user messages)."""
+    result: list[dict] = []
+    pending_tool_results: list[dict] = []
+
+    for msg in messages:
+        if msg.role == "system":
+            continue  # handled separately
+
+        if msg.role == "tool_result":
+            pending_tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": msg.tool_call_id,
+                "content": msg.content,
+            })
+            continue
+
+        # Flush pending tool results before any non-tool_result message
+        if pending_tool_results:
+            result.append({"role": "user", "content": pending_tool_results})
+            pending_tool_results = []
+
+        if msg.role == "assistant" and msg.tool_calls:
+            content: list[dict] = []
+            if msg.content:
+                content.append({"type": "text", "text": msg.content})
+            for tc in msg.tool_calls:
+                content.append({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "input": tc.args,
+                })
+            result.append({"role": "assistant", "content": content})
+        else:
+            result.append({"role": msg.role, "content": msg.content})
+
+    if pending_tool_results:
+        result.append({"role": "user", "content": pending_tool_results})
+
+    return result
+
+
+def _to_openai_tools(tools: list[ToolDef]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            },
+        }
+        for t in tools
+    ]
+
+
+def _to_anthropic_tools(tools: list[ToolDef]) -> list[dict]:
+    return [
+        {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.parameters,
+        }
+        for t in tools
+    ]
+
+
+# ---------------------------------------------------------------------------
+# LLMClient
+# ---------------------------------------------------------------------------
 
 class LLMClient:
     """Unified LLM client over official provider SDKs."""
@@ -72,80 +226,165 @@ class LLMClient:
         self.cfg = cfg
 
     # ------------------------------------------------------------------
-    # Public API
+    # Simple chat (no tools)
     # ------------------------------------------------------------------
 
     def complete(self, messages: list[Message], **kwargs) -> LLMResponse:
-        """Synchronous completion."""
-        provider = self.cfg.provider
-        if provider == "ollama":
-            return self._ollama(messages, **kwargs)
-        elif provider in ("openai", "groq"):
-            return self._openai_compat(messages, **kwargs)
-        elif provider == "anthropic":
-            return self._anthropic(messages, **kwargs)
-        elif provider == "gemini":
-            return self._gemini(messages, **kwargs)
-        else:
-            raise ValueError(f"Unknown provider: {provider!r}")
+        """Synchronous completion (simple messages)."""
+        agent_msgs = [AgentMessage(role=m.role, content=m.content) for m in messages]
+        return self._dispatch(agent_msgs, tools=None, **kwargs)
 
     async def acomplete(self, messages: list[Message], **kwargs) -> LLMResponse:
-        """Async completion (runs sync call in thread to avoid blocking)."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, lambda: self.complete(messages, **kwargs))
 
     async def astream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]:
-        """Async streaming — yields text chunks as they arrive."""
-        provider = self.cfg.provider
-        if provider == "ollama":
-            async for chunk in self._ollama_stream(messages, **kwargs):
+        """Stream text chunks for simple (no-tool) responses."""
+        p = self.cfg.provider
+        agent_msgs = [AgentMessage(role=m.role, content=m.content) for m in messages]
+        if p == "ollama":
+            async for chunk in self._ollama_stream(agent_msgs):
                 yield chunk
-        elif provider in ("openai", "groq"):
-            async for chunk in self._openai_stream(messages, **kwargs):
+        elif p in ("openai", "groq"):
+            async for chunk in self._openai_stream(agent_msgs):
                 yield chunk
-        elif provider == "anthropic":
-            async for chunk in self._anthropic_stream(messages, **kwargs):
+        elif p == "anthropic":
+            async for chunk in self._anthropic_stream(agent_msgs):
                 yield chunk
-        elif provider == "gemini":
-            # Gemini streaming via run_in_executor (SDK is sync-first)
-            response = await self.acomplete(messages, **kwargs)
-            yield response.content
         else:
-            raise ValueError(f"Unknown provider: {provider!r}")
+            resp = await self.acomplete(messages)
+            yield resp.content
 
     # ------------------------------------------------------------------
-    # Provider implementations
+    # Agent loop (with tools)
     # ------------------------------------------------------------------
 
-    def _ollama(self, messages: list[Message], **kwargs) -> LLMResponse:
-        import ollama
-        resp = ollama.chat(
-            model=self.cfg.model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            options={"temperature": self.cfg.temperature},
+    def complete_with_tools(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef],
+    ) -> LLMResponse:
+        return self._dispatch(messages, tools=tools)
+
+    async def acomplete_with_tools(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef],
+    ) -> LLMResponse:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.complete_with_tools(messages, tools)
         )
+
+    async def astream_with_tools(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef],
+    ) -> AsyncIterator[str]:
+        """Stream text chunks during a tool-capable call.
+        Yields text as it arrives; tool calls are NOT streamed (returned
+        via complete_with_tools after streaming finishes).
+        """
+        p = self.cfg.provider
+        if p == "ollama":
+            async for chunk in self._ollama_stream(messages, tools=tools):
+                yield chunk
+        elif p in ("openai", "groq"):
+            async for chunk in self._openai_stream(messages, tools=tools):
+                yield chunk
+        elif p == "anthropic":
+            async for chunk in self._anthropic_stream(messages, tools=tools):
+                yield chunk
+        else:
+            resp = await self.acomplete_with_tools(messages, tools)
+            yield resp.content
+
+    # ------------------------------------------------------------------
+    # Internal dispatch
+    # ------------------------------------------------------------------
+
+    def _dispatch(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef] | None,
+    ) -> LLMResponse:
+        p = self.cfg.provider
+        if p == "ollama":
+            return self._ollama(messages, tools)
+        elif p in ("openai", "groq"):
+            return self._openai(messages, tools)
+        elif p == "anthropic":
+            return self._anthropic(messages, tools)
+        elif p == "gemini":
+            return self._gemini(messages)
+        else:
+            raise ValueError(f"Unknown provider: {p!r}")
+
+    # ------------------------------------------------------------------
+    # Ollama
+    # ------------------------------------------------------------------
+
+    def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
+        import ollama
+
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "messages": _to_openai_messages(messages),
+            "options": {"temperature": self.cfg.temperature},
+        }
+        if tools:
+            kwargs["tools"] = _to_openai_tools(tools)
+
+        resp = ollama.chat(**kwargs)
+        msg = resp.message
+
+        tool_calls: list[ToolCallRequest] = []
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                tool_calls.append(ToolCallRequest(
+                    id=str(uuid.uuid4())[:8],
+                    name=tc.function.name,
+                    args=tc.function.arguments if isinstance(tc.function.arguments, dict)
+                         else json.loads(tc.function.arguments),
+                ))
+
         return LLMResponse(
-            content=resp.message.content,
+            content=msg.content or "",
+            tool_calls=tool_calls,
             input_tokens=resp.prompt_eval_count or 0,
             output_tokens=resp.eval_count or 0,
             model=self.cfg.model,
             provider="ollama",
         )
 
-    async def _ollama_stream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]:
+    async def _ollama_stream(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef] | None = None,
+    ) -> AsyncIterator[str]:
         import ollama
-        stream = ollama.chat(
-            model=self.cfg.model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            options={"temperature": self.cfg.temperature},
-            stream=True,
-        )
-        for chunk in stream:
-            if chunk.message.content:
-                yield chunk.message.content
 
-    def _openai_compat(self, messages: list[Message], **kwargs) -> LLMResponse:
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "messages": _to_openai_messages(messages),
+            "options": {"temperature": self.cfg.temperature},
+            "stream": True,
+        }
+        if tools:
+            kwargs["tools"] = _to_openai_tools(tools)
+
+        for chunk in ollama.chat(**kwargs):
+            text = chunk.message.content
+            if text:
+                yield text
+
+    # ------------------------------------------------------------------
+    # OpenAI / Groq
+    # ------------------------------------------------------------------
+
+    def _openai(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
         import openai
+
         if self.cfg.provider == "groq":
             _groq_limiter.acquire()
             client = openai.OpenAI(
@@ -155,21 +394,44 @@ class LLMClient:
         else:
             client = openai.OpenAI(api_key=self.cfg.api_key or None)
 
-        resp = client.chat.completions.create(
-            model=self.cfg.model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            temperature=self.cfg.temperature,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "messages": _to_openai_messages(messages),
+            "temperature": self.cfg.temperature,
+        }
+        if tools:
+            kwargs["tools"] = _to_openai_tools(tools)
+            kwargs["tool_choice"] = "auto"
+
+        resp = client.chat.completions.create(**kwargs)
+        choice = resp.choices[0]
+        msg = choice.message
+
+        tool_calls: list[ToolCallRequest] = []
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                tool_calls.append(ToolCallRequest(
+                    id=tc.id,
+                    name=tc.function.name,
+                    args=json.loads(tc.function.arguments),
+                ))
+
         return LLMResponse(
-            content=resp.choices[0].message.content or "",
+            content=msg.content or "",
+            tool_calls=tool_calls,
             input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
             output_tokens=resp.usage.completion_tokens if resp.usage else 0,
             model=self.cfg.model,
             provider=self.cfg.provider,
         )
 
-    async def _openai_stream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]:
+    async def _openai_stream(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef] | None = None,
+    ) -> AsyncIterator[str]:
         import openai
+
         if self.cfg.provider == "groq":
             await _groq_limiter.aacquire()
             client = openai.AsyncOpenAI(
@@ -179,57 +441,107 @@ class LLMClient:
         else:
             client = openai.AsyncOpenAI(api_key=self.cfg.api_key or None)
 
-        stream = await client.chat.completions.create(
-            model=self.cfg.model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            temperature=self.cfg.temperature,
-            stream=True,
-        )
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "messages": _to_openai_messages(messages),
+            "temperature": self.cfg.temperature,
+            "stream": True,
+        }
+        if tools:
+            kwargs["tools"] = _to_openai_tools(tools)
+            kwargs["tool_choice"] = "auto"
 
-    def _anthropic(self, messages: list[Message], **kwargs) -> LLMResponse:
+        stream = await client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+
+    # ------------------------------------------------------------------
+    # Anthropic
+    # ------------------------------------------------------------------
+
+    def _anthropic(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
         import anthropic
+
         client = anthropic.Anthropic(api_key=self.cfg.api_key or None)
         system = next((m.content for m in messages if m.role == "system"), "")
-        chat_msgs = [{"role": m.role, "content": m.content} for m in messages if m.role != "system"]
-        resp = client.messages.create(
-            model=self.cfg.model,
-            max_tokens=8096,
-            system=system,
-            messages=chat_msgs,
-            temperature=self.cfg.temperature,
-        )
+        chat_msgs = _to_anthropic_messages(messages)
+
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "max_tokens": 8096,
+            "messages": chat_msgs,
+            "temperature": self.cfg.temperature,
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = _to_anthropic_tools(tools)
+
+        resp = client.messages.create(**kwargs)
+
+        text_content = ""
+        tool_calls: list[ToolCallRequest] = []
+        for block in resp.content:
+            if block.type == "text":
+                text_content += block.text
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCallRequest(
+                    id=block.id,
+                    name=block.name,
+                    args=block.input,
+                ))
+
         return LLMResponse(
-            content=resp.content[0].text,
+            content=text_content,
+            tool_calls=tool_calls,
             input_tokens=resp.usage.input_tokens,
             output_tokens=resp.usage.output_tokens,
             model=self.cfg.model,
             provider="anthropic",
         )
 
-    async def _anthropic_stream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]:
+    async def _anthropic_stream(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef] | None = None,
+    ) -> AsyncIterator[str]:
         import anthropic
+
         client = anthropic.AsyncAnthropic(api_key=self.cfg.api_key or None)
         system = next((m.content for m in messages if m.role == "system"), "")
-        chat_msgs = [{"role": m.role, "content": m.content} for m in messages if m.role != "system"]
-        async with client.messages.stream(
-            model=self.cfg.model,
-            max_tokens=8096,
-            system=system,
-            messages=chat_msgs,
-            temperature=self.cfg.temperature,
-        ) as stream:
+        chat_msgs = _to_anthropic_messages(messages)
+
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "max_tokens": 8096,
+            "messages": chat_msgs,
+            "temperature": self.cfg.temperature,
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = _to_anthropic_tools(tools)
+
+        async with client.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:
                 yield text
 
-    def _gemini(self, messages: list[Message], **kwargs) -> LLMResponse:
+    # ------------------------------------------------------------------
+    # Gemini (no tool calling yet -- text only)
+    # ------------------------------------------------------------------
+
+    def _gemini(self, messages: list[AgentMessage]) -> LLMResponse:
         import google.generativeai as genai
+
         genai.configure(api_key=self.cfg.api_key)
         model = genai.GenerativeModel(self.cfg.model)
-        prompt = "\n".join(f"{m.role}: {m.content}" for m in messages)
+        prompt = "\n".join(
+            f"{m.role}: {m.content}"
+            for m in messages
+            if m.role != "system"
+        )
         resp = model.generate_content(prompt)
         return LLMResponse(
             content=resp.text,
@@ -237,6 +549,10 @@ class LLMClient:
             provider="gemini",
         )
 
+
+# ---------------------------------------------------------------------------
+# Factory helpers
+# ---------------------------------------------------------------------------
 
 def get_llm(config: DevAgentConfig) -> LLMClient:
     """Return an LLMClient for the primary configured provider."""
@@ -247,9 +563,7 @@ def get_llm_for_task(config: DevAgentConfig, task: str) -> LLMClient:
     """Return an LLMClient routed by task type using RouterConfig.
 
     task: "planning" | "coding" | "reviewing" | "cheap"
-    Falls back to primary llm config if router entry matches it.
     """
-    from devagent.core.config import LLMConfig
     router_entry = getattr(config.router, task, None) or config.router.fallback
     routed_cfg = LLMConfig(
         provider=router_entry.get("provider", config.llm.provider),
