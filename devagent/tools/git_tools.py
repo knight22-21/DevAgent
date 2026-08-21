@@ -1,7 +1,8 @@
-"""Git tools: status, diff, log, branch info -- read-only by default.
+"""Git tools: status, diff, log, branch info, plus branch/checkout ops.
 
-Write-capable tools (add, commit, push) are intentionally excluded because
-the user handles all commits. This is a deliberate product decision.
+Intentionally excluded (user handles these): git add, git commit, git push.
+Branch creation and checkout are included because the agent needs to work
+on feature branches without the user having to pre-create them.
 """
 
 from __future__ import annotations
@@ -143,4 +144,86 @@ def register_git_tools(registry: ToolRegistry, project_root: str = ".") -> None:
             "required": ["path"],
         },
         git_blame,
+    )
+
+    # ------------------------------------------------------------------
+    # Write-capable tools (branch management — NOT commit/push)
+    # ------------------------------------------------------------------
+
+    def git_branch_create(args: dict) -> str:
+        name = args.get("name", "").strip()
+        if not name:
+            return "[error] branch name is required"
+        # Reject names that could be mistaken for remote refs
+        if "/" in name and not name.startswith("feat/") and not name.startswith("fix/"):
+            pass  # allow e.g. feat/123-my-feature
+        from_ref = args.get("from_ref", "")
+        cmd = ["checkout", "-b", name]
+        if from_ref:
+            cmd.append(from_ref)
+        return _git(cmd, project_root)
+
+    def git_checkout(args: dict) -> str:
+        target = args.get("branch", "").strip() or args.get("target", "").strip()
+        if not target:
+            return "[error] branch or target is required"
+        return _git(["checkout", target], project_root)
+
+    def git_stash(args: dict) -> str:
+        action = args.get("action", "push")
+        if action == "push":
+            msg = args.get("message", "")
+            cmd = ["stash", "push"]
+            if msg:
+                cmd.extend(["-m", msg])
+        elif action == "pop":
+            cmd = ["stash", "pop"]
+        elif action == "list":
+            cmd = ["stash", "list"]
+        else:
+            return f"[error] Unknown stash action: {action!r}. Use push | pop | list"
+        return _git(cmd, project_root)
+
+    registry.register(
+        "git_branch_create",
+        (
+            "Create a new git branch and switch to it. "
+            "Use from_ref to branch from a specific commit or branch (default: HEAD). "
+            "Note: commit and push are the user's responsibility."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Branch name, e.g. feat/123-my-feature"},
+                "from_ref": {"type": "string", "description": "Starting ref (branch name or commit SHA)"},
+            },
+            "required": ["name"],
+        },
+        git_branch_create,
+    )
+
+    registry.register(
+        "git_checkout",
+        "Switch to an existing branch or commit ref.",
+        {
+            "type": "object",
+            "properties": {
+                "branch": {"type": "string", "description": "Branch name or commit SHA to switch to"},
+            },
+            "required": ["branch"],
+        },
+        git_checkout,
+    )
+
+    registry.register(
+        "git_stash",
+        "Stash, pop, or list git stash entries. action: push | pop | list",
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["push", "pop", "list"], "default": "push"},
+                "message": {"type": "string", "description": "Stash message (for push)"},
+            },
+        },
+        git_stash,
     )
