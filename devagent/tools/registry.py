@@ -52,16 +52,14 @@ def build_registry(
     codeprism_client=None,           # CodePrismClient | None
     security_log: list | None = None,
     confirm_fn=None,                 # Callable[[str], bool] | None
+    github_token: str | None = None,
 ) -> ToolRegistry:
     """Build and return the default tool registry with all built-in tools.
 
-    If codeprism_client is provided:
-      - cp_* knowledge-graph tools are registered
-      - write_file and edit_file are wrapped with the security gate
-
-    security_log: caller-owned list that security gate appends events to.
-    confirm_fn:   callable(warning_msg) -> bool; called on WARN-level issues.
-                  If None, WARN proceeds without confirmation.
+    codeprism_client: enables cp_* graph tools + security gate on writes.
+    security_log:     caller-owned list; security gate appends events to it.
+    confirm_fn:       called on WARN-level writes; returns True to proceed.
+    github_token:     enables all gh_* GitHub API tools.
     """
     from devagent.tools.file_tools import register_file_tools
     from devagent.tools.shell_tool import register_shell_tool
@@ -80,7 +78,6 @@ def build_registry(
 
         register_codeprism_tools(registry, codeprism_client)
 
-        # Wrap file writers with impact estimation + security scanning
         for op in ("write_file", "edit_file"):
             original = registry._handlers.get(op)
             if original:
@@ -92,5 +89,9 @@ def build_registry(
                     security_log=security_log,
                     confirm_fn=confirm_fn,
                 )
+
+    if github_token:
+        from devagent.tools.github_tools import register_github_tools
+        register_github_tools(registry, github_token)
 
     return registry
