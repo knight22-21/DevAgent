@@ -1480,7 +1480,6 @@ def run(
     from devagent.session.budget import TokenBudget
     from devagent.session.manager import SessionManager
     from devagent.session.memory import MemoryBlock
-    from devagent.tools.registry import build_registry
 
     if not config_exists():
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
@@ -1491,7 +1490,6 @@ def run(
         cfg.llm.model = model
 
     project_root, _ = detect_project_root(Path(project) if project else None)
-    registry = build_registry(project_root=str(project_root))
 
     from devagent.core.llm import LLMClient
     llm = LLMClient(cfg.llm)
@@ -1514,6 +1512,47 @@ def run(
         )
         console.print(f"[dim]New session: {session_id[:8]}[/dim]\n")
 
+    # ── CodePrism client (optional — graceful degradation if not indexed) ──
+    cp_client = None
+    try:
+        from devagent.codeprism.client import CodePrismClient
+        cp_client = CodePrismClient(str(project_root))
+        if cp_client.is_indexed:
+            cp_client.attach_session(session_id)
+            console.print("[dim]CodePrism graph: active[/dim]")
+        else:
+            console.print(
+                f"[dim]CodePrism graph: not indexed "
+                f"(run: codeprism index {project_root})[/dim]"
+            )
+            cp_client = None
+    except Exception:
+        cp_client = None
+
+    # ── Security gate setup ───────────────────────────────────────────────
+    security_log: list = []
+
+    def _security_confirm(warning_msg: str) -> bool:
+        console.print(f"\n[yellow]{warning_msg}[/yellow]")
+        return Confirm.ask("Proceed with write?", default=False)
+
+    from devagent.tools.registry import build_registry
+    registry = build_registry(
+        project_root=str(project_root),
+        codeprism_client=cp_client,
+        security_log=security_log,
+        confirm_fn=_security_confirm if cp_client else None,
+    )
+
+    # ── MultiModelRouter (optional — graceful degradation) ───────────────
+    router = None
+    try:
+        from devagent.core.router import MultiModelRouter
+        router = MultiModelRouter(cfg)
+        console.print("[dim]Multi-model router: active[/dim]")
+    except Exception:
+        pass
+
     budget = TokenBudget(
         max_tokens=max_tokens,
         warn_at_percent=cfg.budget.warn_at_percent,
@@ -1529,13 +1568,16 @@ def run(
         memory=memory,
         budget=budget,
         system_prompt=system_prompt,
+        codeprism_client=cp_client,
+        router=router,
     )
 
     console.print(
         Panel(
             f"[bold cyan]DevAgent[/bold cyan]  |  {cfg.llm.provider}/{cfg.llm.model}\n"
             f"[dim]Project: {project_root}[/dim]\n"
-            "[dim]Type your message and press Enter. Ctrl+C to exit.[/dim]",
+            "[dim]Type your message and press Enter. Ctrl+C to exit.[/dim]\n"
+            "[dim]Commands: /memory  /tokens  /security  /exit[/dim]",
             border_style="cyan",
         )
     )
@@ -1543,17 +1585,23 @@ def run(
     # Set a useful session title from the first user message
     title_set = resume is not None
 
+    def _print_session_end() -> None:
+        console.print(f"\n[dim]{budget.status_line()}[/dim]")
+        # Security report at session end (only if there were security events)
+        if security_log:
+            from devagent.tools.security_gate import format_security_report
+            console.print()
+            console.print(
+                Panel(format_security_report(security_log), title="Security Gate Report", border_style="yellow")
+            )
+
     try:
         while True:
             try:
                 user_input = console.input("[bold cyan]>[/bold cyan] ").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Session ended.[/dim]")
-                summary = budget.summary()
-                console.print(
-                    f"[dim]Total: {summary['total_tokens']:,} tokens "
-                    f"({summary['llm_calls']} LLM calls)[/dim]"
-                )
+                _print_session_end()
                 break
 
             if not user_input:
@@ -1561,6 +1609,7 @@ def run(
 
             if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
                 console.print("[dim]Session ended.[/dim]")
+                _print_session_end()
                 break
 
             if user_input.lower() == "/memory":
@@ -1573,11 +1622,21 @@ def run(
                 continue
 
             if user_input.lower() == "/tokens":
-                summary = budget.summary()
+                console.print(f"  [dim]{budget.status_line()}[/dim]")
+                per_model = budget.per_model_summary()
+                if per_model:
+                    for row in per_model:
+                        console.print(
+                            f"    {row['provider']}/{row['model']}: "
+                            f"{row['input_tokens']:,}in / {row['output_tokens']:,}out  "
+                            f"${row['cost_usd']:.4f}  ({row['calls']} calls)"
+                        )
+                continue
+
+            if user_input.lower() == "/security":
+                from devagent.tools.security_gate import format_security_report
                 console.print(
-                    f"  Tokens: {summary['input_tokens']:,} in / "
-                    f"{summary['output_tokens']:,} out / "
-                    f"{summary['total_tokens']:,} total"
+                    Panel(format_security_report(security_log), title="Security Gate", border_style="yellow")
                 )
                 continue
 
@@ -1591,6 +1650,142 @@ def run(
 
     except Exception as exc:
         _handle_error(exc)
+
+
+@app.command()
+def onboard(
+    project: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Project path (defaults to current directory)"
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Output raw JSON instead of rich display"),
+) -> None:
+    """Generate a CodePrism architecture overview for the current project.
+
+    Shows: file map, most-coupled files, top public symbols, and test gap summary.
+    Requires the project to be indexed: codeprism index <path>
+    """
+    from devagent.core.project import detect_project_root
+
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        from devagent.codeprism.client import CodePrismClient
+    except ImportError:
+        console.print("[red]codeprism-ai package not installed.[/red]")
+        raise typer.Exit(1)
+
+    cp = CodePrismClient(str(project_root))
+    if not cp.is_indexed:
+        console.print(
+            Panel(
+                f"[yellow]This project has not been indexed by CodePrism.[/yellow]\n\n"
+                f"Run:  [bold cyan]codeprism index {project_root}[/bold cyan]\n"
+                "Then re-run [bold]devagent onboard[/bold].",
+                title="CodePrism: Not Indexed",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(1)
+
+    console.print()
+    console.print(Panel(
+        f"[bold cyan]DevAgent Onboarding[/bold cyan]\n"
+        f"[dim]Project: {project_root}[/dim]",
+        border_style="cyan",
+    ))
+
+    # ── 1. Stats ──────────────────────────────────────────────────────────
+    with console.status("[cyan]Loading graph stats...[/cyan]"):
+        stats = cp.get_stats()
+
+    if "error" not in stats:
+        t = Table(title="Knowledge Graph", border_style="dim")
+        t.add_column("Metric")
+        t.add_column("Value", justify="right")
+        for k, v in stats.items():
+            if k not in ("last_indexed_at",):
+                t.add_row(str(k).replace("_", " ").title(), str(v))
+        console.print(t)
+
+    # ── 2. File map (top 20 files by symbol count) ────────────────────────
+    with console.status("[cyan]Building file map...[/cyan]"):
+        fm = cp.get_file_map()
+
+    if "error" not in fm:
+        entries = sorted(fm.get("entries", []), key=lambda e: e.get("symbols", 0), reverse=True)
+        t = Table(title="Files by Symbol Count (top 20)", border_style="dim")
+        t.add_column("File", style="cyan")
+        t.add_column("Symbols", justify="right")
+        t.add_column("Role")
+        for e in entries[:20]:
+            t.add_row(e["path"], str(e.get("symbols", 0)), e.get("role", ""))
+        console.print()
+        console.print(t)
+
+    # ── 3. Most-coupled files (highest impact symbols) ────────────────────
+    console.print()
+    console.print("[bold]Most-coupled symbols[/bold] (HIGH/CRITICAL impact on change):")
+    coupled = []
+    if "error" not in fm:
+        for e in entries[:15]:
+            summary = cp.get_module_summary(e["path"])
+            if "error" in summary:
+                continue
+            for sym in summary.get("public_api", [])[:3]:
+                impact = cp.get_impact(e["path"], sym["name"])
+                if "error" not in impact and impact.get("severity") in ("HIGH", "CRITICAL"):
+                    coupled.append({
+                        "file": e["path"],
+                        "symbol": sym["name"],
+                        "severity": impact["severity"],
+                        "surface": impact.get("estimated_change_surface", 0),
+                        "public": impact.get("public_api_affected", False),
+                    })
+
+    if coupled:
+        coupled.sort(key=lambda x: x["surface"], reverse=True)
+        t = Table(border_style="dim")
+        t.add_column("Symbol", style="bold")
+        t.add_column("File", style="cyan")
+        t.add_column("Severity", style="red")
+        t.add_column("Dependents", justify="right")
+        t.add_column("Public API")
+        for row in coupled[:12]:
+            t.add_row(
+                row["symbol"], row["file"], row["severity"],
+                str(row["surface"]), "yes" if row["public"] else "no",
+            )
+        console.print(t)
+    else:
+        console.print("  [dim](none found — graph may be small or all symbols low-impact)[/dim]")
+
+    # ── 4. Test gap summary ───────────────────────────────────────────────
+    console.print()
+    console.print("[bold]Test coverage gaps[/bold] (public files without a matching test file):")
+    no_tests = []
+    if "error" not in fm:
+        for e in entries:
+            if "test" in e["path"].lower():
+                continue
+            summary = cp.get_module_summary(e["path"])
+            if "error" in summary:
+                continue
+            if not summary.get("test_coverage_file") and summary.get("public_api"):
+                no_tests.append(e["path"])
+
+    if no_tests:
+        for p in no_tests[:10]:
+            console.print(f"  [yellow]•[/yellow] {p}")
+        if len(no_tests) > 10:
+            console.print(f"  ... and {len(no_tests) - 10} more")
+    else:
+        console.print("  [green]No obvious test gaps found.[/green]")
+
+    console.print()
+    console.print(
+        "[dim]Tip: Use [bold]devagent run[/bold] to start an agent session. "
+        "The agent will automatically use the CodePrism graph to reduce token usage.[/dim]"
+    )
 
 
 @app.command()
