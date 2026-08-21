@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from devagent.core.models import IssueComplexity, WatcherAnalysis
 from devagent.watcher.conflict_detector import CrossIssueConflictDetector
@@ -23,7 +21,7 @@ def make_analysis(
         issue_number=issue_number,
         issue_title=f"Issue {issue_number}",
         issue_url=f"https://github.com/myorg/backend/issues/{issue_number}",
-        analysed_at=datetime.now(timezone.utc),
+        analysed_at=datetime.now(UTC),
         requirements_count=2,
         conflicts_count=len(conflicted),
         complexity=IssueComplexity.LOW,

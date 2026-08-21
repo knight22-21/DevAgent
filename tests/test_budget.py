@@ -1,7 +1,8 @@
 """Tests for TokenBudget with USD cost tracking."""
 
 import pytest
-from devagent.session.budget import TokenBudget, BudgetExceeded, ModelUsage
+
+from devagent.session.budget import BudgetExceeded, TokenBudget
 
 
 def test_record_accumulates_tokens():

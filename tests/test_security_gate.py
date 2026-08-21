@@ -6,10 +6,7 @@ so the security gate logic can be exercised without a live CodePrism index.
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock, patch
-from pathlib import Path
-
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Helpers / stubs
@@ -64,7 +61,7 @@ def _wrap(
 # ---------------------------------------------------------------------------
 
 def test_pass_calls_original_handler(tmp_path):
-    wrapped, handler, client, log = _wrap(
+    wrapped, handler, _, _ = _wrap(
         scan_status="PASS",
         project_root=str(tmp_path),
     )
@@ -76,7 +73,7 @@ def test_pass_calls_original_handler(tmp_path):
 
 def test_pass_logs_write(tmp_path):
     log = []
-    wrapped, _, client, _ = _wrap(
+    wrapped, _, _, _ = _wrap(
         scan_status="PASS",
         project_root=str(tmp_path),
         security_log=log,
@@ -95,7 +92,7 @@ def test_pass_logs_write(tmp_path):
 
 def test_block_returns_error_string(tmp_path):
     issues = [{"severity": "CRITICAL", "description": "hardcoded secret"}]
-    wrapped, handler, _, log = _wrap(
+    wrapped, handler, _, _ = _wrap(
         scan_status="BLOCK",
         issues=issues,
         project_root=str(tmp_path),
@@ -136,7 +133,7 @@ def test_warn_no_confirm_fn_proceeds(tmp_path):
         confirm_fn=None,
         project_root=str(tmp_path),
     )
-    result = wrapped({"path": "ok.py", "content": "eval('x')"})
+    wrapped({"path": "ok.py", "content": "eval('x')"})
     handler.assert_called_once()
     warn_events = [e for e in log if e.get("action") == "WARN"]
     assert len(warn_events) == 1
@@ -154,7 +151,7 @@ def test_warn_confirm_fn_true_proceeds(tmp_path):
         confirm_fn=confirm,
         project_root=str(tmp_path),
     )
-    result = wrapped({"path": "mod.py", "content": "import os"})
+    wrapped({"path": "mod.py", "content": "import os"})
     confirm.assert_called_once()
     handler.assert_called_once()
 

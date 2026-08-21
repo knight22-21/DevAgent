@@ -1,6 +1,7 @@
-import os
 from pathlib import Path
+
 import pytest
+
 
 @pytest.fixture
 def temp_project_dir(tmp_path: Path) -> Path:
@@ -43,8 +44,10 @@ def mock_config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # F3 — Watcher fixtures
 # ---------------------------------------------------------------------------
 
-import pytest_asyncio
+from datetime import UTC
 from unittest.mock import patch
+
+import pytest_asyncio
 
 
 @pytest_asyncio.fixture
@@ -59,15 +62,16 @@ async def watcher_db(tmp_path: Path):
 
 @pytest.fixture
 def sample_watcher_analysis():
-    from devagent.core.models import WatcherAnalysis, IssueComplexity
-    from datetime import datetime, timezone
+    from datetime import datetime
+
+    from devagent.core.models import IssueComplexity, WatcherAnalysis
     return WatcherAnalysis(
         owner="myorg",
         repo="backend",
         issue_number=142,
         issue_title="Add OAuth2 login with Google",
         issue_url="https://github.com/myorg/backend/issues/142",
-        analysed_at=datetime.now(timezone.utc),
+        analysed_at=datetime.now(UTC),
         requirements_count=4,
         conflicts_count=1,
         complexity=IssueComplexity.MEDIUM,

@@ -1,6 +1,13 @@
-import pytest
-from devagent.core.models import GapReport, Requirement, RequirementAnalysis, RequirementType, RequirementStatus, EffortEstimate
 from devagent.chat.context import build_system_prompt, estimate_prompt_tokens
+from devagent.core.models import (
+    EffortEstimate,
+    GapReport,
+    Requirement,
+    RequirementAnalysis,
+    RequirementStatus,
+    RequirementType,
+)
+
 
 def test_estimate_prompt_tokens():
     text = "a" * 40

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # 1. MultiModelRouter — LLM client caching
@@ -102,8 +101,8 @@ def _make_memory_block():
 
 
 def _build_registry_with_memory():
-    from devagent.tools.registry import ToolRegistry
     from devagent.tools.memory_tools import register_memory_tools
+    from devagent.tools.registry import ToolRegistry
     registry = ToolRegistry()
     memory = _make_memory_block()
     register_memory_tools(registry, memory)
@@ -118,25 +117,25 @@ def test_remember_fact_stores_value():
 
 
 def test_remember_fact_missing_key():
-    registry, memory = _build_registry_with_memory()
+    registry, _ = _build_registry_with_memory()
     result = registry.call("remember_fact", {"value": "some value"})
     assert "[error]" in result
 
 
 def test_remember_fact_missing_value():
-    registry, memory = _build_registry_with_memory()
+    registry, _ = _build_registry_with_memory()
     result = registry.call("remember_fact", {"key": "mykey"})
     assert "[error]" in result
 
 
 def test_recall_facts_empty():
-    registry, memory = _build_registry_with_memory()
+    registry, _ = _build_registry_with_memory()
     result = registry.call("recall_facts", {})
     assert "No facts" in result
 
 
 def test_recall_facts_returns_all():
-    registry, memory = _build_registry_with_memory()
+    registry, _ = _build_registry_with_memory()
     registry.call("remember_fact", {"key": "file_a", "value": "path/to/a.py"})
     registry.call("remember_fact", {"key": "file_b", "value": "path/to/b.py"})
     result = registry.call("recall_facts", {})
@@ -155,7 +154,7 @@ def test_forget_fact_removes_key():
 
 
 def test_forget_fact_missing_key():
-    registry, memory = _build_registry_with_memory()
+    registry, _ = _build_registry_with_memory()
     result = registry.call("forget_fact", {})
     assert "[error]" in result
 
@@ -175,10 +174,8 @@ def test_memory_tools_registered_in_registry():
 def _make_loop_with_mocked_cp(module_summary=None, test_output="1 passed"):
     """Build an AgentLoop stub for testing the repair method."""
     from devagent.agent.loop import AgentLoop
-    from devagent.tools.registry import ToolRegistry
-    from devagent.session.manager import SessionManager
-    from devagent.session.memory import MemoryBlock
     from devagent.session.budget import TokenBudget
+    from devagent.tools.registry import ToolRegistry
 
     cp = MagicMock()
     cp.get_module_summary.return_value = module_summary or {"test_coverage_file": "tests/test_foo.py"}

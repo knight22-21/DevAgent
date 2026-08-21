@@ -1,23 +1,20 @@
-import os
-import pytest
 from pathlib import Path
 
+import pytest
+
 from devagent.core.storage import (
-    get_project_hash,
     ensure_dirs,
-    get_project_dir,
     get_chroma_dir,
-    get_sqlite_path,
+    get_index_status,
+    get_project_dir,
+    get_project_hash,
     get_reports_dir,
     init_db,
-    get_index_status,
 )
 
 
 def test_project_hash_deterministic():
     path1 = Path("C:/Users/Test/Project")
-    path2 = Path("c:\\users\\test\\project")  # Should be normalized in storage?
-    
     # Actually the hash is just SHA256 of the string, so let's test determinism
     # for the exact same path string.
     hash1 = get_project_hash(path1)

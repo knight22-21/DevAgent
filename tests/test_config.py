@@ -1,12 +1,12 @@
-import os
 from pathlib import Path
 
 from devagent.core.config import (
     DevAgentConfig,
+    config_exists,
     load_config,
     save_config,
-    config_exists,
 )
+
 
 def test_config_defaults():
     config = DevAgentConfig()

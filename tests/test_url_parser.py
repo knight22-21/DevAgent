@@ -1,5 +1,7 @@
 import pytest
-from devagent.core.url_parser import parse_github_url, format_repo_string, InvalidGitHubURLError
+
+from devagent.core.url_parser import InvalidGitHubURLError, format_repo_string, parse_github_url
+
 
 def test_standard_issue_url():
     result = parse_github_url("https://github.com/myorg/backend/issues/142")

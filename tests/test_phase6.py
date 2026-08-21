@@ -8,10 +8,6 @@ import threading
 import time
 from http.client import HTTPConnection
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helper — find a free port
@@ -168,7 +164,8 @@ def test_server_json_content_type():
 # ---------------------------------------------------------------------------
 
 def _load_bench(name: str):
-    import importlib.util, sys
+    import importlib.util
+    import sys
     spec = importlib.util.spec_from_file_location(
         name,
         Path(__file__).parent.parent / "benchmarks" / f"{name}.py",

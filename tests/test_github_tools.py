@@ -1,8 +1,8 @@
 """Tests for GitHub tools and flow URL parsers."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # URL parser tests
@@ -111,8 +111,8 @@ def test_github_api_post(mock_post):
 
 def _make_registry_with_mocked_gh(mock_gh: MagicMock):
     """Build a registry where GitHubAPI is replaced by mock_gh."""
-    from devagent.tools.registry import ToolRegistry
     from devagent.tools.github_tools import register_github_tools
+    from devagent.tools.registry import ToolRegistry
 
     registry = ToolRegistry()
     with patch("devagent.tools.github_tools.GitHubAPI", return_value=mock_gh):
