@@ -1443,6 +1443,44 @@ def session_delete(
     console.print("[green]Session deleted.[/green]")
 
 
+@session_app.command("compress")
+def session_compress(
+    session_id: str = typer.Argument(..., help="Session ID (or unique prefix)"),
+    keep: int = typer.Option(20, "--keep", "-k", help="Hot-window size: keep last N events verbatim"),
+) -> None:
+    """Compress a session's history into a compact summary to free context window space."""
+    from devagent.core.llm import LLMClient
+    from devagent.session.compressor import compress_session
+    from devagent.session.manager import SessionManager
+
+    mgr = SessionManager()
+    sessions = mgr.list(limit=200)
+    match = next((s for s in sessions if s["id"].startswith(session_id)), None)
+    if not match:
+        console.print(f"[red]Session not found: {session_id}[/red]")
+        raise typer.Exit(1)
+
+    sid = match["id"]
+    cfg = load_config() if config_exists() else None
+    from devagent.core.config import DevAgentConfig
+    if cfg is None:
+        cfg = DevAgentConfig()
+
+    llm = LLMClient(cfg.llm)
+
+    console.print(f"[cyan]Compressing session {sid[:8]}...[/cyan]")
+    result = compress_session(sid, llm, keep_last_n=keep)
+
+    if result is None:
+        console.print("[dim]Nothing to compress — session is short enough already.[/dim]")
+        return
+
+    console.print(f"[green]Compressed {result.events_compressed} events.[/green]")
+    console.print(f"[dim]{result.events_remaining} hot-window events kept verbatim.[/dim]")
+    console.print(f"[dim]~{result.tokens_saved} tokens freed.[/dim]")
+    console.print(f"[dim]Summary length: {len(result.summary)} chars.[/dim]")
+
+
 # ---------------------------------------------------------------------------
 # Primary agent run command
 # ---------------------------------------------------------------------------
