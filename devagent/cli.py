@@ -1461,6 +1461,12 @@ def run(
     max_tokens: int | None = typer.Option(
         None, "--max-tokens", help="Token budget for this session"
     ),
+    no_limit: bool = typer.Option(
+        False, "--no-limit", help="Remove the iteration cap (use with caution)"
+    ),
+    plan: bool = typer.Option(
+        False, "--plan", help="Generate and approve a plan before each new task"
+    ),
 ) -> None:
     """Start an interactive agent session (the main DevAgent command)."""
     from devagent.agent.flows import DevAgentSession
@@ -1482,6 +1488,8 @@ def run(
             project_root,
             max_tokens=max_tokens,
             resume_id=resume,
+            no_limit=no_limit,
+            plan_mode=plan,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1504,6 +1512,65 @@ def run(
 
 
 # ---------------------------------------------------------------------------
+# Phase 7.1 — Quick action mode
+# ---------------------------------------------------------------------------
+
+@app.command()
+def do(
+    task: str = typer.Argument(..., help="Task for the agent to perform"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Override model"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", help="Token budget"),
+    no_session: bool = typer.Option(False, "--no-session", help="Skip persisting session to SQLite"),
+    no_limit: bool = typer.Option(False, "--no-limit", help="Remove the iteration cap"),
+) -> None:
+    """Run a single task non-interactively and exit (exit code 0=success, 1=error)."""
+    from devagent.agent.flows import DevAgentSession
+    from devagent.agent.loop import ErrorEvent, FinalAnswerEvent
+    from devagent.core.project import detect_project_root
+    from devagent.output.streaming import render_events
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        session = DevAgentSession(
+            cfg,
+            project_root,
+            max_tokens=max_tokens,
+            no_limit=no_limit,
+        )
+    except Exception as exc:
+        _handle_error(exc)
+        return
+
+    # Collect all events, render them, then determine exit code
+    events = list(session._loop.run(task))
+    # Record the user message so session is properly stored
+    render_events(iter(events))
+
+    # Clean up session record if --no-session requested
+    if no_session:
+        try:
+            session._mgr.delete(session.session_id)
+        except Exception:
+            pass
+
+    # Exit 1 if any ErrorEvent was emitted
+    for ev in events:
+        if isinstance(ev, ErrorEvent):
+            raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
+# ---------------------------------------------------------------------------
 # Phase 4 flow commands
 # ---------------------------------------------------------------------------
 
@@ -1513,6 +1580,8 @@ def implement(
     project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
     max_tokens: int | None = typer.Option(None, "--max-tokens"),
     model: str | None = typer.Option(None, "--model", "-m"),
+    plan: bool = typer.Option(False, "--plan", help="Generate and approve a plan before executing"),
+    no_limit: bool = typer.Option(False, "--no-limit", help="Remove the iteration cap"),
 ) -> None:
     """Fetch a GitHub issue and implement it end-to-end (branch → edit → test → PR)."""
     from devagent.agent.flows import run_implement
@@ -1528,7 +1597,7 @@ def implement(
     project_root, _ = detect_project_root(Path(project) if project else None)
 
     try:
-        run_implement(cfg, project_root, url, max_tokens=max_tokens)
+        run_implement(cfg, project_root, url, max_tokens=max_tokens, plan_mode=plan, no_limit=no_limit)
     except (ValueError, RuntimeError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -1872,6 +1941,141 @@ def serve(
     except OSError as exc:
         console.print(f"[red]Could not start server: {exc}[/red]")
         raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.4 — Skills sub-app
+# ---------------------------------------------------------------------------
+
+skills_app = typer.Typer(name="skills", help="Manage DevAgent skills.", add_completion=False)
+app.add_typer(skills_app, name="skills")
+
+
+@skills_app.command("list")
+def skills_list() -> None:
+    """List all available skills (built-in + user-defined)."""
+    from devagent.skills.loader import load_all_skills
+    from rich.table import Table
+
+    all_skills = load_all_skills()
+
+    table = Table(title="Available Skills", border_style="cyan")
+    table.add_column("Command", style="cyan bold")
+    table.add_column("Description")
+    table.add_column("Tools", style="dim")
+    table.add_column("Model", style="dim")
+
+    for name, skill in sorted(all_skills.items()):
+        tools = ", ".join(skill.tools_only) if skill.tools_only else "all"
+        model = skill.model or "default"
+        table.add_row(f"/{name}", skill.description, tools, model)
+
+    console.print()
+    console.print(table)
+    user_dir = Path.home() / ".config" / "devagent" / "skills"
+    console.print(f"\n[dim]User skills directory: {user_dir}[/dim]")
+    console.print("[dim]Run [bold]devagent skills new[/bold] to create a skill.[/dim]")
+
+
+@skills_app.command("new")
+def skills_new() -> None:
+    """Interactive wizard to create a new user-defined skill."""
+    from rich.prompt import Prompt
+
+    console.print()
+    console.print("[bold cyan]Create a new skill[/bold cyan]\n")
+
+    name = Prompt.ask("Skill name (used as /command)").strip().lower().replace(" ", "-")
+    if not name:
+        console.print("[red]Name cannot be empty.[/red]")
+        raise typer.Exit(1)
+
+    description = Prompt.ask("Short description")
+    console.print("[dim]Enter the prompt the agent will receive when this skill is invoked.[/dim]")
+    console.print("[dim](Type END on a new line to finish)[/dim]")
+
+    prompt_lines = []
+    while True:
+        line = input()
+        if line.strip() == "END":
+            break
+        prompt_lines.append(line)
+    prompt_text = "\n".join(prompt_lines)
+
+    tools_input = Prompt.ask(
+        "Restrict to tools (comma-separated, leave empty for all)",
+        default="",
+    ).strip()
+    tools_only = [t.strip() for t in tools_input.split(",") if t.strip()] if tools_input else []
+
+    model = Prompt.ask(
+        "Model tier (empty = session default, or: cheap / reviewing / planning)",
+        default="",
+    ).strip()
+
+    max_iter = Prompt.ask("Max iterations (0 = session default)", default="0").strip()
+    try:
+        max_iter_int = int(max_iter)
+    except ValueError:
+        max_iter_int = 0
+
+    # Build TOML content
+    import tomli_w
+    data: dict = {
+        "name": name,
+        "description": description,
+        "prompt": prompt_text,
+    }
+    if tools_only:
+        data["tools_only"] = tools_only
+    if model:
+        data["model"] = model
+    if max_iter_int:
+        data["max_iter"] = max_iter_int
+
+    user_dir = Path.home() / ".config" / "devagent" / "skills"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    out_path = user_dir / f"{name}.toml"
+
+    with open(out_path, "wb") as f:
+        tomli_w.dump(data, f)
+
+    console.print(f"\n[green]Skill saved: {out_path}[/green]")
+    console.print(f"[dim]Use it with: /{name}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.6 — DevAgent as MCP server
+# ---------------------------------------------------------------------------
+
+@app.command()
+def mcp(
+    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or sse"),
+    port: int = typer.Option(7332, "--port", help="Port for SSE transport"),
+    project: str | None = typer.Option(None, "--project", help="Project path"),
+) -> None:
+    """Start DevAgent as an MCP server (connect from Claude Desktop, Cursor, etc.)."""
+    from devagent.core.project import detect_project_root
+    from devagent.mcp.server import serve_mcp
+
+    cfg = load_config() if config_exists() else None
+    from devagent.core.config import DevAgentConfig
+    if cfg is None:
+        cfg = DevAgentConfig()
+
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    if transport == "stdio":
+        console.print("[dim]DevAgent MCP server starting (stdio)...[/dim]")
+        console.print("[dim]Add to claude_desktop_config.json:[/dim]")
+        console.print('[dim]  "devagent": {"command": "devagent", "args": ["mcp"]}[/dim]')
+    else:
+        console.print(f"[dim]DevAgent MCP server starting (SSE on port {port})...[/dim]")
+
+    try:
+        serve_mcp(str(project_root), cfg, transport=transport, port=port)
+    except Exception as exc:
+        _handle_error(exc)
 
 
 if __name__ == "__main__":
