@@ -1,6 +1,11 @@
 """Convert stored session events to AgentMessage lists for the LLM.
 
 Handles the full set of roles: system, user, assistant (with tool calls), tool_result.
+
+Phase 8: When a compressed summary exists for a session, only the hot-window
+events (is_compressed=0) are replayed.  The summary is appended to the system
+prompt so the LLM retains context from earlier turns without paying the full
+token cost of the original event log.
 """
 
 from __future__ import annotations
@@ -14,15 +19,28 @@ def build_messages(
     system_prompt: str,
     db_path=None,
 ) -> list[AgentMessage]:
-    """Reconstruct the full conversation as AgentMessage objects.
+    """Reconstruct the conversation as AgentMessage objects for the LLM.
 
-    The system prompt is always first. Events are loaded from the DB
-    and returned in chronological order with tool calls rehydrated.
+    If a compressed summary exists the system prompt is augmented with it
+    and only uncompressed (hot-window) events are replayed — reducing the
+    number of tokens sent on every turn for long sessions.
     """
-    events = store.get_events(session_id, db_path=db_path)
+    compressed_summary = store.get_compressed_summary(session_id, db_path=db_path)
+
+    if compressed_summary:
+        # Inject summary into system prompt; load only the hot window
+        full_system = (
+            system_prompt
+            + "\n\n## Context from earlier in this session (compressed summary):\n"
+            + compressed_summary
+        )
+        events = store.get_active_events(session_id, db_path=db_path)
+    else:
+        full_system = system_prompt
+        events = store.get_events(session_id, db_path=db_path)
 
     messages: list[AgentMessage] = [
-        AgentMessage(role="system", content=system_prompt)
+        AgentMessage(role="system", content=full_system)
     ]
 
     for ev in events:
