@@ -47,3 +47,46 @@ def build_system_prompt(
         parts.append(memory_block)
 
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — worker-specific system prompts
+# ---------------------------------------------------------------------------
+
+_WORKER_ROLE_ADDENDA: dict[str, str] = {
+    "implementer": (
+        "\n## Role: Implementer\n"
+        "You are implementing one subtask in a parallel multi-agent coding session.\n"
+        "Focus only on the files and scope described in your task.\n"
+        "Do not touch code outside your assigned scope.\n"
+        "When done, summarise what you changed and why."
+    ),
+    "tester": (
+        "\n## Role: Tester\n"
+        "You are writing and running tests in a parallel multi-agent coding session.\n"
+        "Write test files only — do NOT modify production code.\n"
+        "Run the tests with run_shell and report pass/fail counts.\n"
+        "If tests fail, explain why without attempting to fix the production code."
+    ),
+    "reviewer": (
+        "\n## Role: Reviewer\n"
+        "You are reviewing code in a parallel multi-agent coding session.\n"
+        "Read files only — do NOT write or edit any files.\n"
+        "Produce a structured review covering: bugs, security issues, "
+        "missing error handling, and style problems."
+    ),
+}
+
+
+def build_worker_system_prompt(
+    worker_type: str,
+    project_root: str = "",
+) -> str:
+    """Build a system prompt for a worker agent of the given type."""
+    parts = [_BASE]
+    if project_root:
+        parts.append(f"\n## Project\n{project_root}")
+    addendum = _WORKER_ROLE_ADDENDA.get(worker_type, "")
+    if addendum:
+        parts.append(addendum)
+    return "\n".join(parts)
