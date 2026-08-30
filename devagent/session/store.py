@@ -69,8 +69,32 @@ def init_schema(db_path: Path | None = None) -> None:
                 UNIQUE(session_id, scope, key),
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
+
+            CREATE TABLE IF NOT EXISTS task_graph (
+                id              TEXT NOT NULL,
+                session_id      TEXT NOT NULL,
+                description     TEXT NOT NULL DEFAULT '',
+                worker_type     TEXT NOT NULL DEFAULT 'implementer',
+                depends_on      TEXT NOT NULL DEFAULT '[]',
+                status          TEXT NOT NULL DEFAULT 'pending',
+                result          TEXT NOT NULL DEFAULT '',
+                output_files    TEXT NOT NULL DEFAULT '[]',
+                assigned_session TEXT NOT NULL DEFAULT '',
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL,
+                PRIMARY KEY (session_id, id),
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS file_locks (
+                session_id  TEXT NOT NULL,
+                file_path   TEXT NOT NULL,
+                worker_id   TEXT NOT NULL,
+                locked_at   REAL NOT NULL,
+                PRIMARY KEY (session_id, file_path)
+            );
         """)
-        # Migrate existing databases that predate Phase 8 columns
+        # Migrate existing databases that predate Phase 8/9 columns
         for sql in (
             "ALTER TABLE sessions ADD COLUMN compressed_summary TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE events ADD COLUMN is_compressed INTEGER NOT NULL DEFAULT 0",
@@ -334,3 +358,135 @@ def count_compressed_events(session_id: str, db_path: Path | None = None) -> int
             (session_id,),
         ).fetchone()
     return row[0] if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — task graph persistence
+# ---------------------------------------------------------------------------
+
+def upsert_task(
+    session_id: str,
+    task_id: str,
+    description: str,
+    worker_type: str = "implementer",
+    depends_on: list[str] | None = None,
+    status: str = "pending",
+    result: str = "",
+    output_files: list[str] | None = None,
+    assigned_session: str = "",
+    db_path: Path | None = None,
+) -> None:
+    now = time.time()
+    with _conn(db_path) as conn:
+        conn.execute(
+            """INSERT INTO task_graph
+               (id, session_id, description, worker_type, depends_on, status,
+                result, output_files, assigned_session, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(session_id, id)
+               DO UPDATE SET status=excluded.status, result=excluded.result,
+                             output_files=excluded.output_files,
+                             assigned_session=excluded.assigned_session,
+                             updated_at=excluded.updated_at""",
+            (
+                task_id, session_id, description, worker_type,
+                json.dumps(depends_on or []), status,
+                result, json.dumps(output_files or []),
+                assigned_session, now, now,
+            ),
+        )
+
+
+def get_tasks(session_id: str, db_path: Path | None = None) -> list[dict]:
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM task_graph WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["depends_on"] = json.loads(d["depends_on"])
+        d["output_files"] = json.loads(d["output_files"])
+        result.append(d)
+    return result
+
+
+def update_task_status(
+    session_id: str,
+    task_id: str,
+    status: str,
+    result: str = "",
+    output_files: list[str] | None = None,
+    assigned_session: str = "",
+    db_path: Path | None = None,
+) -> None:
+    now = time.time()
+    with _conn(db_path) as conn:
+        conn.execute(
+            """UPDATE task_graph SET status=?, result=?, output_files=?,
+               assigned_session=?, updated_at=?
+               WHERE session_id=? AND id=?""",
+            (
+                status, result,
+                json.dumps(output_files or []),
+                assigned_session, now,
+                session_id, task_id,
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — file lock table
+# ---------------------------------------------------------------------------
+
+def acquire_file_lock(
+    session_id: str,
+    file_path: str,
+    worker_id: str,
+    db_path: Path | None = None,
+) -> bool:
+    """Try to acquire an exclusive write lock. Returns True on success."""
+    now = time.time()
+    try:
+        with _conn(db_path) as conn:
+            conn.execute(
+                "INSERT INTO file_locks (session_id, file_path, worker_id, locked_at) VALUES (?, ?, ?, ?)",
+                (session_id, file_path, worker_id, now),
+            )
+        return True
+    except Exception:
+        return False  # UNIQUE constraint violation — already locked
+
+
+def release_file_lock(
+    session_id: str,
+    file_path: str,
+    worker_id: str,
+    db_path: Path | None = None,
+) -> None:
+    with _conn(db_path) as conn:
+        conn.execute(
+            "DELETE FROM file_locks WHERE session_id=? AND file_path=? AND worker_id=?",
+            (session_id, file_path, worker_id),
+        )
+
+
+def release_all_worker_locks(
+    session_id: str,
+    worker_id: str,
+    db_path: Path | None = None,
+) -> None:
+    with _conn(db_path) as conn:
+        conn.execute(
+            "DELETE FROM file_locks WHERE session_id=? AND worker_id=?",
+            (session_id, worker_id),
+        )
+
+
+def get_file_locks(session_id: str, db_path: Path | None = None) -> list[dict]:
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM file_locks WHERE session_id=?", (session_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
