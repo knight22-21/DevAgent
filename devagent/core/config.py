@@ -82,6 +82,9 @@ class AgentConfig(BaseModel):
     stream_thoughts: bool = True
     confirmation_required: bool = True
     auto_run_tests: bool = True
+    loop_detection: bool = True       # detect repeated identical tool calls and bail early
+    shell_output_cap_kb: int = 0      # 0 = unlimited; stream large output to temp file
+    shell_timeout_sec: int = 300      # per-command timeout in seconds (0 = no timeout)
 
 
 class SessionConfig(BaseModel):
