@@ -15,7 +15,6 @@ import re
 import subprocess
 import tempfile
 import threading
-import uuid
 from pathlib import Path
 
 from devagent.tools.registry import ToolRegistry
