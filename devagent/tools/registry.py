@@ -46,6 +46,16 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools.keys())
 
+    def get_restricted_definitions(self, tool_names: list[str]) -> list[ToolDef]:
+        """Return only ToolDefs whose names are in tool_names.
+
+        If tool_names is empty, returns all definitions (no restriction).
+        Silently ignores names that are not registered.
+        """
+        if not tool_names:
+            return self.get_definitions()
+        return [self._tools[n] for n in tool_names if n in self._tools]
+
 
 def build_registry(
     project_root: str = ".",
