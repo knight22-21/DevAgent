@@ -222,6 +222,25 @@ class DevAgentSession:
     # Public API
     # ------------------------------------------------------------------
 
+    def _maybe_compress(self) -> None:
+        """Auto-compress history if it has grown past the configured threshold."""
+        if not self._cfg.session.auto_compress:
+            return
+        try:
+            from devagent.session.compressor import maybe_compress
+            result = maybe_compress(
+                session_id=self.session_id,
+                llm=self._llm,
+                session_cfg=self._cfg.session,
+            )
+            if result:
+                self._console.print(
+                    f"[dim]Auto-compressed {result.events_compressed} events "
+                    f"(~{result.tokens_saved} tokens saved).[/dim]"
+                )
+        except Exception:
+            pass  # compression is best-effort; never block a turn
+
     def run_message(self, message: str, quiet: bool = False) -> str:
         """Drive one user turn; render events. Returns the final LLM text.
 
@@ -231,6 +250,10 @@ class DevAgentSession:
         """
         from devagent.agent.loop import FinalAnswerEvent
         from devagent.output.streaming import render_events
+
+        # Auto-compress long sessions before each turn
+        if not quiet:
+            self._maybe_compress()
 
         # Plan mode: intercept the first user message
         if self._plan_mode:
