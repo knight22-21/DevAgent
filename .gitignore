@@ -224,3 +224,6 @@ DEVAGENT_ROADMAP.md
 
 # Private developer documentation (personal notes, internal diagrams)
 dev-docs/
+
+# Demo and testing documentation
+DEMO_GUIDE.md
