@@ -2117,5 +2117,70 @@ def mcp(
         _handle_error(exc)
 
 
+# ---------------------------------------------------------------------------
+# Phase 9 — Multi-agent orchestration
+# ---------------------------------------------------------------------------
+
+@app.command()
+def orchestrate(
+    task: str = typer.Argument(..., help="High-level task for the agent team to accomplish"),
+    workers: int = typer.Option(4, "--workers", "-w", help="Maximum parallel workers"),
+    plan: bool = typer.Option(False, "--plan", is_flag=True, help="Show decomposition plan before executing"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Override LLM model"),
+    max_iter: int = typer.Option(20, "--max-iter", help="Max iterations per worker agent"),
+) -> None:
+    """Decompose a task and run multiple worker agents in parallel."""
+    from devagent.agent.loop import ErrorEvent, FinalAnswerEvent, StatusEvent, ThinkingEvent
+    from devagent.agent.orchestrator import OrchestratorSession
+    from devagent.core.project import detect_project_root
+
+    cfg = load_config() if config_exists() else None
+    from devagent.core.config import DevAgentConfig
+    if cfg is None:
+        cfg = DevAgentConfig()
+
+    if model:
+        cfg = cfg.model_copy(update={"llm": cfg.llm.model_copy(update={"model": model})})
+
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    console.print(
+        f"[bold cyan]DevAgent Orchestrate[/bold cyan]  |  "
+        f"{cfg.llm.provider}/{cfg.llm.model}  |  workers: {workers}"
+    )
+
+    session = OrchestratorSession(
+        cfg=cfg,
+        project_root=project_root,
+        max_workers=workers,
+        plan_mode=plan,
+        worker_max_iterations=max_iter,
+    )
+
+    exit_code = 0
+    try:
+        for event in session.run(task):
+            if isinstance(event, ThinkingEvent):
+                console.print(f"[dim]{event.text}[/dim]")
+            elif isinstance(event, StatusEvent):
+                console.print(f"[cyan]» {event.status_line}[/cyan]")
+            elif isinstance(event, ErrorEvent):
+                console.print(f"[red]✗ {event.message}[/red]")
+                exit_code = 1
+            elif isinstance(event, FinalAnswerEvent):
+                console.print()
+                console.rule("[cyan]Final Summary[/cyan]")
+                console.print(event.text)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Orchestration interrupted.[/dim]")
+        exit_code = 1
+    except Exception as exc:
+        _handle_error(exc)
+        exit_code = 1
+
+    raise typer.Exit(exit_code)
+
+
 if __name__ == "__main__":
     app()
