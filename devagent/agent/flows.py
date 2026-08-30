@@ -107,6 +107,8 @@ class DevAgentSession:
         max_tokens: int | None = None,
         extra_system: str = "",
         resume_id: str | None = None,
+        no_limit: bool = False,       # Phase 7.2: remove iteration cap
+        plan_mode: bool = False,      # Phase 7.3: generate plan before first task
     ) -> None:
         from devagent.agent.loop import AgentLoop
         from devagent.agent.system_prompt import build_system_prompt
@@ -192,6 +194,8 @@ class DevAgentSession:
         )
 
         llm = LLMClient(cfg.llm)
+        import sys
+        max_iters = sys.maxsize if no_limit else cfg.agent.max_iterations
         self._loop = AgentLoop(
             llm=llm,
             registry=registry,
@@ -202,6 +206,8 @@ class DevAgentSession:
             system_prompt=system_prompt,
             codeprism_client=cp_client,
             router=router,
+            max_iterations=max_iters,
+            loop_detection=cfg.agent.loop_detection,
         )
 
         # Status flags for the REPL
@@ -209,6 +215,8 @@ class DevAgentSession:
         self._gh_active = bool(gh_token)
         self._router_active = router is not None
         self._title_set = resume_id is not None
+        self._plan_mode = plan_mode
+        self._llm = LLMClient(cfg.llm)  # kept for plan generation
 
     # ------------------------------------------------------------------
     # Public API
@@ -218,9 +226,26 @@ class DevAgentSession:
         """Drive one user turn; render events. Returns the final LLM text.
 
         quiet=True suppresses all terminal output (used by background watcher).
+        On the first call when plan_mode=True, generates and presents a plan for
+        approval before executing.
         """
         from devagent.agent.loop import FinalAnswerEvent
         from devagent.output.streaming import render_events
+
+        # Plan mode: intercept the first user message
+        if self._plan_mode:
+            self._plan_mode = False  # only applies once per session
+            from devagent.agent.planner import generate_plan
+            from devagent.output.plan_renderer import plan_to_first_message, render_plan
+
+            with self._console.status("[cyan]Generating plan...[/cyan]"):
+                plan = generate_plan(self._llm, message, self._project_root.name)
+
+            result = render_plan(plan, self._console)
+            if result == "cancel":
+                self._console.print("[dim]Task cancelled.[/dim]")
+                return ""
+            message = plan_to_first_message(plan, message)
 
         if quiet:
             final = ""
@@ -285,6 +310,50 @@ class DevAgentSession:
                 )
                 continue
 
+            # Phase 7.4 — Skills / slash commands
+            if raw.startswith("/"):
+                parts = raw[1:].split(None, 1)
+                skill_name = parts[0].lower()
+                extra_args = parts[1] if len(parts) > 1 else ""
+
+                from devagent.skills.loader import load_all_skills
+                skills = load_all_skills()
+
+                if skill_name == "help":
+                    self._console.print()
+                    self._console.print("[bold]Available skills:[/bold]")
+                    for sn, sk in skills.items():
+                        self._console.print(f"  [cyan]/{sn}[/cyan]  {sk.description}")
+                    self._console.print()
+                    self._console.print("[dim]Built-in: /memory  /tokens  /security  /exit[/dim]")
+                    continue
+
+                if skill_name in skills:
+                    skill = skills[skill_name]
+                    skill_msg = skill.prompt
+                    if extra_args:
+                        skill_msg += f"\n\nTarget / context: {extra_args}"
+
+                    # Restrict tools if skill specifies
+                    if skill.tools_only:
+                        orig_get_defs = self._loop.registry.get_definitions
+                        restricted = self._loop.registry.get_restricted_definitions(skill.tools_only)
+                        self._loop.registry.get_definitions = lambda: restricted  # type: ignore[method-assign]
+
+                    self._console.print(f"[dim]Running skill: /{skill_name}[/dim]")
+                    self.run_message(skill_msg)
+
+                    # Restore unrestricted tools
+                    if skill.tools_only:
+                        self._loop.registry.get_definitions = orig_get_defs  # type: ignore[method-assign]
+                    continue
+
+                self._console.print(f"[yellow]Unknown command: /{skill_name}[/yellow]")
+                self._console.print(
+                    "[dim]Type /help to see available skills.[/dim]"
+                )
+                continue
+
             if not self._title_set:
                 self._mgr.set_title(self.session_id, raw[:60])
                 self._title_set = True
@@ -302,6 +371,7 @@ class DevAgentSession:
                 f"{self._cfg.llm.provider}/{self._cfg.llm.model}  |  mode: {mode}\n"
                 f"[dim]Project: {self._project_root}[/dim]\n"
                 f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
+                "[dim]Skills: /explain  /test  /review  /commit  /summarize  /help[/dim]\n"
                 "[dim]Commands: /memory  /tokens  /security  /exit[/dim]",
                 border_style="cyan",
             )
@@ -360,7 +430,7 @@ Be explicit about every file you change and why. If tests fail, fix them before 
 """
 
 
-def run_implement(cfg, project_root: Path, issue_url: str, max_tokens: int | None = None) -> None:
+def run_implement(cfg, project_root: Path, issue_url: str, max_tokens: int | None = None, plan_mode: bool = False, no_limit: bool = False) -> None:
     """Fetch a GitHub issue and run the implement flow."""
     console = Console()
     token = _require_gh_token(cfg)
@@ -410,6 +480,8 @@ def run_implement(cfg, project_root: Path, issue_url: str, max_tokens: int | Non
         project_root,
         max_tokens=max_tokens,
         extra_system=extra_system,
+        plan_mode=plan_mode,
+        no_limit=no_limit,
     )
     session._mgr.set_title(session.session_id, f"impl: #{parsed.number} {title[:40]}")
     session._title_set = True
