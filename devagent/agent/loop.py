@@ -39,8 +39,8 @@ except ImportError:
     _HAS_ROUTER = False
 
 
-MAX_ITERATIONS = 30  # hard safety cap
-MAX_REPAIR = 3       # max consecutive auto-test retries after a write
+_DEFAULT_MAX_ITERATIONS = 30  # used when no value passed to constructor
+MAX_REPAIR = 3                # max consecutive auto-test retries after a write
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +128,10 @@ class AgentLoop:
         memory: MemoryBlock,
         budget: TokenBudget,
         system_prompt: str,
-        codeprism_client=None,   # CodePrismClient | None
-        router=None,             # MultiModelRouter | None
+        codeprism_client=None,        # CodePrismClient | None
+        router=None,                  # MultiModelRouter | None
+        max_iterations: int = 0,      # 0 = use _DEFAULT_MAX_ITERATIONS; pass cfg value
+        loop_detection: bool = True,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -141,6 +143,10 @@ class AgentLoop:
         self._cp_client = codeprism_client
         self._router = router
         self._repair_attempt = 0  # consecutive test-repair attempts after a write
+        self._max_iterations = max_iterations if max_iterations > 0 else _DEFAULT_MAX_ITERATIONS
+        self._loop_detection = loop_detection
+        # Loop detection: ring buffer of (tool_name, args_fingerprint) pairs
+        self._recent_calls: list[tuple[str, str]] = []
 
     def run(self, user_message: str) -> Generator[AgentEvent, None, None]:
         """Drive one user turn through the ReAct loop.
@@ -160,7 +166,7 @@ class AgentLoop:
         if memory_block:
             full_system = full_system + memory_block
 
-        while iteration < MAX_ITERATIONS:
+        while iteration < self._max_iterations:
             iteration += 1
 
             # Refresh session overlay from CodePrism each turn
@@ -241,6 +247,26 @@ class AgentLoop:
                 last_tool_names = []
                 for tc in response.tool_calls:
                     last_tool_names.append(tc.name)
+
+                    # Loop detection: track recent (tool_name, args_fingerprint) pairs
+                    if self._loop_detection:
+                        fingerprint = str(sorted(tc.args.items()))[:120]
+                        self._recent_calls.append((tc.name, fingerprint))
+                        if len(self._recent_calls) > 8:
+                            self._recent_calls.pop(0)
+                        # Count occurrences of this exact call in the recent window
+                        count = sum(
+                            1 for n, f in self._recent_calls
+                            if n == tc.name and f == fingerprint
+                        )
+                        if count >= 3:
+                            yield ErrorEvent(
+                                f"Loop detected: agent called '{tc.name}' with identical "
+                                f"arguments {count} times in the last {len(self._recent_calls)} calls. "
+                                "Stopping to avoid an infinite loop."
+                            )
+                            return
+
                     yield ToolCallEvent(id=tc.id, name=tc.name, args=tc.args)
 
                     result = self.registry.call(tc.name, tc.args)
@@ -283,7 +309,7 @@ class AgentLoop:
                 return
 
         # Exceeded max iterations
-        yield ErrorEvent(f"Agent loop exceeded {MAX_ITERATIONS} iterations without finishing")
+        yield ErrorEvent(f"Agent loop exceeded {self._max_iterations} iterations without finishing")
 
     # ------------------------------------------------------------------
     # Test-driven repair helpers
