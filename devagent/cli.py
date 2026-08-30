@@ -1526,7 +1526,7 @@ def do(
 ) -> None:
     """Run a single task non-interactively and exit (exit code 0=success, 1=error)."""
     from devagent.agent.flows import DevAgentSession
-    from devagent.agent.loop import ErrorEvent, FinalAnswerEvent
+    from devagent.agent.loop import ErrorEvent
     from devagent.core.project import detect_project_root
     from devagent.output.streaming import render_events
 
@@ -1954,8 +1954,9 @@ app.add_typer(skills_app, name="skills")
 @skills_app.command("list")
 def skills_list() -> None:
     """List all available skills (built-in + user-defined)."""
-    from devagent.skills.loader import load_all_skills
     from rich.table import Table
+
+    from devagent.skills.loader import load_all_skills
 
     all_skills = load_all_skills()
 

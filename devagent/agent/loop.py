@@ -40,6 +40,7 @@ except ImportError:
 
 
 _DEFAULT_MAX_ITERATIONS = 30  # used when no value passed to constructor
+MAX_ITERATIONS = _DEFAULT_MAX_ITERATIONS  # public alias kept for backward compatibility
 MAX_REPAIR = 3                # max consecutive auto-test retries after a write
 
 

@@ -338,7 +338,7 @@ class DevAgentSession:
                     if skill.tools_only:
                         orig_get_defs = self._loop.registry.get_definitions
                         restricted = self._loop.registry.get_restricted_definitions(skill.tools_only)
-                        self._loop.registry.get_definitions = lambda: restricted  # type: ignore[method-assign]
+                        self._loop.registry.get_definitions = lambda _r=restricted: _r  # type: ignore[method-assign]
 
                     self._console.print(f"[dim]Running skill: /{skill_name}[/dim]")
                     self.run_message(skill_msg)
