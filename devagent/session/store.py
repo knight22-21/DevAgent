@@ -29,28 +29,30 @@ def init_schema(db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS sessions (
-                id          TEXT PRIMARY KEY,
-                project     TEXT NOT NULL DEFAULT '',
-                model       TEXT NOT NULL DEFAULT '',
-                provider    TEXT NOT NULL DEFAULT '',
-                title       TEXT NOT NULL DEFAULT '',
-                created_at  REAL NOT NULL,
-                updated_at  REAL NOT NULL,
-                metadata    TEXT NOT NULL DEFAULT '{}'
+                id                  TEXT PRIMARY KEY,
+                project             TEXT NOT NULL DEFAULT '',
+                model               TEXT NOT NULL DEFAULT '',
+                provider            TEXT NOT NULL DEFAULT '',
+                title               TEXT NOT NULL DEFAULT '',
+                created_at          REAL NOT NULL,
+                updated_at          REAL NOT NULL,
+                metadata            TEXT NOT NULL DEFAULT '{}',
+                compressed_summary  TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS events (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id  TEXT NOT NULL,
-                seq         INTEGER NOT NULL,
-                role        TEXT NOT NULL,
-                content     TEXT NOT NULL DEFAULT '',
-                tool_calls  TEXT NOT NULL DEFAULT '[]',
-                tool_call_id TEXT NOT NULL DEFAULT '',
-                tool_name   TEXT NOT NULL DEFAULT '',
-                tokens_in   INTEGER NOT NULL DEFAULT 0,
-                tokens_out  INTEGER NOT NULL DEFAULT 0,
-                created_at  REAL NOT NULL,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    TEXT NOT NULL,
+                seq           INTEGER NOT NULL,
+                role          TEXT NOT NULL,
+                content       TEXT NOT NULL DEFAULT '',
+                tool_calls    TEXT NOT NULL DEFAULT '[]',
+                tool_call_id  TEXT NOT NULL DEFAULT '',
+                tool_name     TEXT NOT NULL DEFAULT '',
+                tokens_in     INTEGER NOT NULL DEFAULT 0,
+                tokens_out    INTEGER NOT NULL DEFAULT 0,
+                created_at    REAL NOT NULL,
+                is_compressed INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
             CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq);
@@ -68,6 +70,15 @@ def init_schema(db_path: Path | None = None) -> None:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
         """)
+        # Migrate existing databases that predate Phase 8 columns
+        for sql in (
+            "ALTER TABLE sessions ADD COLUMN compressed_summary TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE events ADD COLUMN is_compressed INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                conn.execute(sql)
+            except Exception:
+                pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------
@@ -258,3 +269,68 @@ def delete_memory_key(
             "DELETE FROM memory_items WHERE session_id = ? AND scope = ? AND key = ?",
             (session_id, scope, key),
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — context auto-compression helpers
+# ---------------------------------------------------------------------------
+
+def get_compressed_summary(session_id: str, db_path: Path | None = None) -> str:
+    """Return the stored compressed summary for this session, or '' if none."""
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT compressed_summary FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    return (row["compressed_summary"] or "") if row else ""
+
+
+def save_compressed_summary(
+    session_id: str,
+    summary: str,
+    db_path: Path | None = None,
+) -> None:
+    """Persist the compressed summary on the session row."""
+    now = time.time()
+    with _conn(db_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET compressed_summary = ?, updated_at = ? WHERE id = ?",
+            (summary, now, session_id),
+        )
+
+
+def mark_events_compressed(
+    session_id: str,
+    max_seq: int,
+    db_path: Path | None = None,
+) -> None:
+    """Flag all events with seq <= max_seq as compressed (part of the summary)."""
+    with _conn(db_path) as conn:
+        conn.execute(
+            "UPDATE events SET is_compressed = 1 WHERE session_id = ? AND seq <= ?",
+            (session_id, max_seq),
+        )
+
+
+def get_active_events(session_id: str, db_path: Path | None = None) -> list[dict]:
+    """Return only events that have NOT been folded into the compressed summary."""
+    with _conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM events WHERE session_id = ? AND is_compressed = 0 ORDER BY seq ASC",
+            (session_id,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["tool_calls"] = json.loads(d["tool_calls"])
+        result.append(d)
+    return result
+
+
+def count_compressed_events(session_id: str, db_path: Path | None = None) -> int:
+    """Return how many events have been compressed so far."""
+    with _conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE session_id = ? AND is_compressed = 1",
+            (session_id,),
+        ).fetchone()
+    return row[0] if row else 0
