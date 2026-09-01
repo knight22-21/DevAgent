@@ -578,6 +578,7 @@ def create_app(config=None, project_root: str | Path = ".") -> FastAPI:
     _state["config"] = config
     _state["project_root"] = Path(project_root).resolve()
     _state["start_time"] = time.time()
+    session_store.init_schema()
     return app
 
 
