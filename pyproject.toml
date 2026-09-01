@@ -41,6 +41,9 @@ dependencies = [
     "tenacity>=9.0.0",
     "pydantic>=2.8.0",
     "apscheduler>=3.10.0",
+    # REST + WebSocket API server (devagent serve)
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.urls]
