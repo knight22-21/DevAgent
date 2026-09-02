@@ -1505,6 +1505,15 @@ def run(
     plan: bool = typer.Option(
         False, "--plan", help="Generate and approve a plan before each new task"
     ),
+    allow: list[str] = typer.Option(  # noqa: B008
+        [], "--allow", help="Auto-approve tool calls matching this rule (e.g. 'write_file:src/**')"
+    ),
+    deny: list[str] = typer.Option(  # noqa: B008
+        [], "--deny", help="Auto-deny tool calls matching this rule (e.g. 'run_shell')"
+    ),
+    interactive_approval: bool = typer.Option(
+        False, "--interactive-approval", help="Pause and ask before every unmatched tool call"
+    ),
 ) -> None:
     """Start an interactive agent session (the main DevAgent command)."""
     from devagent.agent.flows import DevAgentSession
@@ -1528,6 +1537,9 @@ def run(
             resume_id=resume,
             no_limit=no_limit,
             plan_mode=plan,
+            allow=list(allow),
+            deny=list(deny),
+            interactive_approval=interactive_approval,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
