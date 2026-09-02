@@ -109,8 +109,13 @@ class DevAgentSession:
         resume_id: str | None = None,
         no_limit: bool = False,       # Phase 7.2: remove iteration cap
         plan_mode: bool = False,      # Phase 7.3: generate plan before first task
+        allow: list[str] | None = None,   # Phase 10: auto-allow patterns
+        deny: list[str] | None = None,    # Phase 10: auto-deny patterns
+        interactive_approval: bool = False,  # Phase 10: pause for approval when no rule matches
     ) -> None:
+        from devagent.agent import permissions as perm_registry
         from devagent.agent.loop import AgentLoop
+        from devagent.agent.permissions import PermissionManager, parse_rule
         from devagent.agent.system_prompt import build_system_prompt
         from devagent.core.llm import LLMClient
         from devagent.session.budget import TokenBudget
@@ -139,6 +144,19 @@ class DevAgentSession:
             )
         self._mgr = mgr
         self.session_id = session_id
+
+        # ── Permission manager (Phase 10) ─────────────────────────────
+        rules = []
+        for spec in (deny or []):
+            rules.append(parse_rule(spec, "deny"))
+        for spec in (allow or []):
+            rules.append(parse_rule(spec, "allow"))
+        self._permission_mgr: PermissionManager | None = None
+        if rules or interactive_approval:
+            self._permission_mgr = PermissionManager(
+                rules=rules, interactive=interactive_approval
+            )
+            perm_registry.register(session_id, self._permission_mgr)
 
         # ── CodePrism (optional) ─────────────────────────────────────
         cp_client = None
@@ -208,6 +226,7 @@ class DevAgentSession:
             router=router,
             max_iterations=max_iters,
             loop_detection=cfg.agent.loop_detection,
+            permission_mgr=self._permission_mgr,
         )
 
         # Status flags for the REPL
@@ -277,7 +296,7 @@ class DevAgentSession:
                     final = event.text
             return final
 
-        return render_events(self._loop.run(message))
+        return render_events(self._loop.run(message), permission_mgr=self._permission_mgr)
 
     def interactive_repl(self, *, first_message: str | None = None) -> None:
         """Run the interactive REPL, optionally seeding with first_message."""
@@ -401,6 +420,8 @@ class DevAgentSession:
         )
 
     def _print_exit(self) -> None:
+        from devagent.agent import permissions as perm_registry
+        perm_registry.unregister(self.session_id)
         self._console.print(f"[dim]{self._budget.status_line()}[/dim]")
         if self.security_log:
             from devagent.tools.security_gate import format_security_report

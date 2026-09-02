@@ -17,6 +17,7 @@ from rich.text import Text
 
 from devagent.agent.loop import (
     AgentEvent,
+    ApprovalNeededEvent,
     BudgetWarningEvent,
     ErrorEvent,
     FinalAnswerEvent,
@@ -29,11 +30,15 @@ from devagent.agent.loop import (
 console = Console()
 
 
-def render_events(events: Generator[AgentEvent, None, None]) -> str:
+def render_events(
+    events: Generator[AgentEvent, None, None],
+    permission_mgr=None,   # PermissionManager | None
+) -> str:
     """Render a stream of agent events to the terminal.
 
     Returns the final text answer (or empty string on error).
     """
+
     final_text = ""
     for event in events:
         if isinstance(event, ThinkingEvent):
@@ -51,6 +56,8 @@ def render_events(events: Generator[AgentEvent, None, None]) -> str:
             _render_status(event)
         elif isinstance(event, ErrorEvent):
             _render_error(event)
+        elif isinstance(event, ApprovalNeededEvent):
+            _render_approval_needed(event, permission_mgr)
     return final_text
 
 
@@ -138,3 +145,23 @@ def _render_error(event: ErrorEvent) -> None:
     console.print(
         Panel(event.message, title="[bold red]Agent Error[/bold red]", border_style="red")
     )
+
+
+def _render_approval_needed(event: ApprovalNeededEvent, permission_mgr=None) -> None:
+    from rich.prompt import Confirm
+
+    label = event.primary_arg or str(event.args)[:80]
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]{event.tool_name}[/bold]  {label}",
+            title="[yellow bold]Permission required[/yellow bold]",
+            border_style="yellow",
+        )
+    )
+    if permission_mgr is not None:
+        approved = Confirm.ask("Allow this operation?", default=False)
+        permission_mgr.resolve(event.call_id, approved)
+    else:
+        # No manager wired — auto-allow so the loop is not stuck
+        pass
