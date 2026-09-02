@@ -16,6 +16,7 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any
 
+from devagent.agent.permissions import PermissionManager
 from devagent.core.llm import LLMClient
 from devagent.session.budget import BudgetExceeded, TokenBudget
 from devagent.session.history import build_messages
@@ -101,6 +102,15 @@ class ErrorEvent:
     message: str
 
 
+@dataclass
+class ApprovalNeededEvent:
+    """Permission gate requires user approval before tool execution."""
+    call_id: str
+    tool_name: str
+    args: dict
+    primary_arg: str = ""   # the path / command being acted on
+
+
 AgentEvent = (
     ThinkingEvent
     | ToolCallEvent
@@ -109,6 +119,7 @@ AgentEvent = (
     | BudgetWarningEvent
     | StatusEvent
     | ErrorEvent
+    | ApprovalNeededEvent
 )
 
 # Tool names that trigger the auto-test repair loop
@@ -133,6 +144,7 @@ class AgentLoop:
         router=None,                  # MultiModelRouter | None
         max_iterations: int = 0,      # 0 = use _DEFAULT_MAX_ITERATIONS; pass cfg value
         loop_detection: bool = True,
+        permission_mgr: PermissionManager | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -146,6 +158,7 @@ class AgentLoop:
         self._repair_attempt = 0  # consecutive test-repair attempts after a write
         self._max_iterations = max_iterations if max_iterations > 0 else _DEFAULT_MAX_ITERATIONS
         self._loop_detection = loop_detection
+        self._permission_mgr = permission_mgr
         # Loop detection: ring buffer of (tool_name, args_fingerprint) pairs
         self._recent_calls: list[tuple[str, str]] = []
 
@@ -269,6 +282,50 @@ class AgentLoop:
                             return
 
                     yield ToolCallEvent(id=tc.id, name=tc.name, args=tc.args)
+
+                    # Permission gate — check before executing
+                    if self._permission_mgr is not None:
+                        from devagent.agent.permissions import _primary_arg
+                        action = self._permission_mgr.check(tc.name, tc.args)
+                        if action == "deny":
+                            result = (
+                                f"[blocked] Tool '{tc.name}' call denied by permission rule."
+                            )
+                            yield ToolResultEvent(
+                                id=tc.id, name=tc.name, result=result, success=False
+                            )
+                            self.session_mgr.record_tool_result(
+                                self.session_id,
+                                tool_call_id=tc.id,
+                                tool_name=tc.name,
+                                content=result,
+                            )
+                            continue
+                        if action == "ask":
+                            primary = _primary_arg(tc.name, tc.args)
+                            self._permission_mgr.request_approval(tc.id)
+                            yield ApprovalNeededEvent(
+                                call_id=tc.id,
+                                tool_name=tc.name,
+                                args=tc.args,
+                                primary_arg=primary,
+                            )
+                            # Generator suspended here. CLI/UI resolves and resumes.
+                            approved = self._permission_mgr.wait_for_decision(tc.id, timeout=300.0)
+                            if not approved:
+                                result = (
+                                    f"[blocked] Tool '{tc.name}' call denied by user."
+                                )
+                                yield ToolResultEvent(
+                                    id=tc.id, name=tc.name, result=result, success=False
+                                )
+                                self.session_mgr.record_tool_result(
+                                    self.session_id,
+                                    tool_call_id=tc.id,
+                                    tool_name=tc.name,
+                                    content=result,
+                                )
+                                continue
 
                     result = self.registry.call(tc.name, tc.args)
 
