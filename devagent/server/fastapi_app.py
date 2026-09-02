@@ -7,7 +7,7 @@ REST endpoints (v1):
   DELETE /api/v1/sessions/{id}             delete a session
   GET    /api/v1/sessions/{id}/events      event log (paginated, incremental)
   GET    /api/v1/sessions/{id}/memory      structured memory facts
-  POST   /api/v1/sessions/{id}/approve     approve pending write_file (Phase 10 stub)
+  POST   /api/v1/sessions/{id}/approve     approve/deny a pending tool call (Phase 10)
   GET    /api/v1/orchestrate/{id}/graph    task DAG for orchestrate sessions
   GET    /api/v1/orchestrate/{id}/locks    active file locks
   GET    /api/v1/metrics                   aggregated token/cost/session metrics
@@ -45,7 +45,7 @@ from fastapi.responses import JSONResponse
 from devagent.server.ws_manager import manager as ws_manager
 from devagent.session import store as session_store
 
-_VERSION = "0.4.0-dev"
+_VERSION = "0.5.0"
 
 # ---------------------------------------------------------------------------
 # Module-level state — updated by create_app() before each server start
@@ -325,11 +325,32 @@ def v1_session_memory(session_id: str) -> dict:
 
 
 @app.post("/api/v1/sessions/{session_id}/approve")
-def v1_approve(session_id: str) -> dict:
-    """Approve a pending write_file gate. Stub — Phase 10 wires the real gate."""
+async def v1_approve(session_id: str, request: Request) -> dict:
+    """Approve or deny a pending tool call in an active session.
+
+    Body (JSON): {"call_id": "...", "approved": true}
+    call_id is optional — if omitted, resolves the most recent pending call.
+    approved defaults to true.
+    """
     if session_store.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-    return {"ok": True, "note": "Permission gate not yet active (Phase 10)"}
+
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    call_id: str = body.get("call_id", "")
+    approved: bool = bool(body.get("approved", True))
+
+    from devagent.agent import permissions as perm_registry
+    mgr = perm_registry.get(session_id)
+    if mgr is not None and call_id:
+        mgr.resolve(call_id, approved)
+        return {"ok": True, "session_id": session_id, "call_id": call_id, "approved": approved}
+
+    return {"ok": True, "session_id": session_id, "note": "No active permission gate for this session"}
 
 
 @app.get("/api/v1/orchestrate/{session_id}/graph")
