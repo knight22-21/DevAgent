@@ -2194,5 +2194,73 @@ def orchestrate(
     raise typer.Exit(exit_code)
 
 
+# ---------------------------------------------------------------------------
+# Phase 12 — Project scaffolding
+# ---------------------------------------------------------------------------
+
+_DEVAGENT_MD_TEMPLATE = """\
+# DEVAGENT.md
+
+Project-specific instructions for DevAgent.
+This file is automatically injected into the agent's system prompt at session start.
+
+## Tech stack
+<!-- e.g. Python 3.12, FastAPI, SQLite, Typer, pytest -->
+
+## Test command
+<!-- e.g. python -m pytest tests/ -q -->
+
+## Code conventions
+<!-- e.g. ruff format, no type: ignore, prefer edit_file over write_file -->
+
+## Important paths
+<!-- e.g. devagent/ — main source, tests/ — all tests -->
+
+## Known constraints
+<!-- e.g. No LangGraph; pure Python with official SDKs -->
+"""
+
+
+@app.command("init-project")
+def init_project(
+    path: str = typer.Argument(".", help="Project root to initialise (default: current directory)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing DEVAGENT.md"),
+) -> None:
+    """Scaffold DEVAGENT.md (project instructions) and .devagent/ directory."""
+    root = Path(path).resolve()
+
+    devagent_md = root / "DEVAGENT.md"
+    memory_dir = root / ".devagent"
+    memory_file = memory_dir / "memory.md"
+
+    if devagent_md.exists() and not force:
+        console.print(f"[yellow]DEVAGENT.md already exists at {devagent_md}[/yellow]")
+        console.print("Use [bold]--force[/bold] to overwrite.")
+        raise typer.Exit(1)
+
+    devagent_md.write_text(_DEVAGENT_MD_TEMPLATE, encoding="utf-8")
+    console.print(f"[green]✓[/green] Created {devagent_md}")
+
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    if not memory_file.exists():
+        memory_file.write_text(
+            "# DevAgent Memory\n<!-- auto-managed — edit with care -->\n",
+            encoding="utf-8",
+        )
+        console.print(f"[green]✓[/green] Created {memory_file}")
+
+    gitignore = root / ".gitignore"
+    if gitignore.exists():
+        content = gitignore.read_text(encoding="utf-8")
+        if ".devagent/" not in content:
+            with gitignore.open("a", encoding="utf-8") as f:
+                f.write("\n# DevAgent cross-session memory (local only)\n.devagent/\n")
+            console.print(f"[green]✓[/green] Added .devagent/ to {gitignore}")
+
+    console.print("\n[bold]Next steps:[/bold]")
+    console.print("  1. Edit [bold]DEVAGENT.md[/bold] to describe your project, tech stack, and conventions.")
+    console.print("  2. Run [bold]devagent run[/bold] — the agent will read DEVAGENT.md on startup.")
+
+
 if __name__ == "__main__":
     app()
