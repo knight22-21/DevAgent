@@ -199,16 +199,22 @@ class DevAgentSession:
             warn_at_percent=cfg.budget.warn_at_percent,
         )
         self._budget = budget
-        memory = MemoryBlock(session_id)
+
+        from devagent.agent.system_prompt import load_devagent_md
+        from devagent.session.project_memory import ProjectMemory
+        project_memory = ProjectMemory(self._project_root)
+        memory = MemoryBlock(session_id, project_memory=project_memory)
         self._memory = memory
 
         # Memory tools — agent can explicitly store/recall facts across turns
         from devagent.tools.memory_tools import register_memory_tools
         register_memory_tools(registry, memory)
 
+        devagent_md = load_devagent_md(self._project_root)
         system_prompt = build_system_prompt(
             project_description=f"Project: {self._project_root.name}",
             extra_context=extra_system,
+            devagent_md=devagent_md,
         )
 
         llm = LLMClient(cfg.llm)
