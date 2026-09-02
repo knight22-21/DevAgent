@@ -8,6 +8,20 @@ The prompt is composed at session start and can be extended with:
 
 from __future__ import annotations
 
+from pathlib import Path
+
+_DEVAGENT_MD = "DEVAGENT.md"
+
+
+def load_devagent_md(project_root: str | Path) -> str:
+    """Read DEVAGENT.md from the project root. Returns '' if the file doesn't exist."""
+    path = Path(project_root) / _DEVAGENT_MD
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
 _BASE = """\
 You are DevAgent, an AI coding assistant running locally on the developer's machine.
 You have direct access to the project files and can read, write, and edit them.
@@ -34,11 +48,15 @@ def build_system_prompt(
     project_description: str = "",
     memory_block: str = "",
     extra_context: str = "",
+    devagent_md: str = "",
 ) -> str:
     parts = [_BASE]
 
     if project_description:
         parts.append(f"\n## Project\n{project_description}")
+
+    if devagent_md:
+        parts.append(f"\n## Project Instructions (DEVAGENT.md)\n{devagent_md}")
 
     if extra_context:
         parts.append(f"\n## Context\n{extra_context}")
