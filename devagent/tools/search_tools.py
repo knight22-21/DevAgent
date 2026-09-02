@@ -1,4 +1,8 @@
-"""Search tools: grep (text search), glob (file patterns), symbol lookup."""
+"""Search tools: grep (text search), glob (file patterns), symbol lookup.
+
+Phase 11 (web tools) is deferred: fetch_url, web_search, and JSON extraction
+will be added in Phase 11 once Phase 12 is stable and released.
+"""
 
 from __future__ import annotations
 
