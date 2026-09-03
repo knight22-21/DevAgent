@@ -78,12 +78,14 @@ class Worker:
         project_root: str,
         coordinator_session_id: str,      # parent session for context
         max_iterations: int = 20,
+        dep_context: str = "",            # Phase 14: completed dependency summaries
     ) -> None:
         self._task = task
         self._cfg = cfg
         self._project_root = project_root
         self._coordinator_session_id = coordinator_session_id
         self._max_iterations = max_iterations
+        self._dep_context = dep_context
         self._thread: threading.Thread | None = None
         self._result: WorkerResult | None = None
 
@@ -141,9 +143,24 @@ class Worker:
                 loop_detection=True,
             )
 
+            # Phase 14: register orchestration tools when coordinator session is known
+            if self._coordinator_session_id:
+                from devagent.tools.agent_tools import register_orchestration_tools
+                register_orchestration_tools(registry, self._coordinator_session_id)
+
+            # Phase 14: register spawn_agent so workers can delegate further
+            from devagent.tools.agent_tools import register_agent_tools
+            register_agent_tools(registry, self._cfg, self._project_root)
+
+            dep_section = (
+                f"\n\n## Prior work by dependency tasks\n{self._dep_context}"
+                if self._dep_context
+                else ""
+            )
             task_message = (
                 f"Task: {self._task.description}\n\n"
-                f"Project root: {self._project_root}\n"
+                f"Project root: {self._project_root}"
+                f"{dep_section}\n\n"
                 "Complete this task and produce a concise summary of what you did."
             )
 
