@@ -210,6 +210,10 @@ class DevAgentSession:
         from devagent.tools.memory_tools import register_memory_tools
         register_memory_tools(registry, memory)
 
+        # ── Sub-agent spawning (Phase 14) ────────────────────────────
+        from devagent.tools.agent_tools import register_agent_tools
+        register_agent_tools(registry, cfg, str(self._project_root))
+
         # ── Undo stack (Phase 13) ─────────────────────────────────────
         # Each entry: {"path": str, "before": str | None}
         # before=None means the file did not exist before the write (new file).
