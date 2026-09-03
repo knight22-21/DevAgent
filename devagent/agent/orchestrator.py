@@ -139,6 +139,28 @@ class OrchestratorSession:
 
         yield FinalAnswerEvent(text=final_summary)
 
+    def _build_dep_context(self, task: TaskNode, graph: TaskGraph) -> str:
+        """Build a summary of completed dependency results for a worker task.
+
+        Gives each worker visibility into the work done by the tasks it depends
+        on, so it can make informed decisions without calling read_peer_results.
+        """
+        if not task.depends_on:
+            return ""
+        all_nodes = {n.id: n for n in graph.all_nodes()}
+        parts: list[str] = []
+        for dep_id in task.depends_on:
+            dep = all_nodes.get(dep_id)
+            if dep and dep.status == "done" and dep.result:
+                files = ", ".join(dep.output_files) or "none"
+                snippet = dep.result[:400]
+                parts.append(
+                    f"- [{dep.worker_type}] {dep.description}\n"
+                    f"  Files: {files}\n"
+                    f"  Summary: {snippet}"
+                )
+        return "\n".join(parts)
+
     def _run_wave(self, tasks: list[TaskNode], graph: TaskGraph) -> list[WorkerResult]:
         """Execute a parallel wave of tasks; returns results in completion order."""
         workers = [
@@ -148,6 +170,7 @@ class OrchestratorSession:
                 project_root=self._project_root,
                 coordinator_session_id=self._session_id,
                 max_iterations=self._worker_max_iters,
+                dep_context=self._build_dep_context(task, graph),
             )
             for task in tasks
         ]
