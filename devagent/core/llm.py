@@ -20,6 +20,34 @@ from typing import Any
 from devagent.core.config import DevAgentConfig, LLMConfig
 
 # ---------------------------------------------------------------------------
+# Effort-level tables
+# ---------------------------------------------------------------------------
+
+_EFFORT_MAX_TOKENS: dict[str, int] = {
+    "low":    2_048,
+    "medium": 4_096,
+    "high":   8_192,
+    "xhigh": 16_384,
+    "max":   32_768,
+}
+
+# Temperature overrides for low/medium; high/xhigh/max use cfg.temperature
+_EFFORT_TEMPERATURE: dict[str, float] = {
+    "low":    0.3,
+    "medium": 0.2,
+}
+
+# Effort levels that activate extended thinking (Anthropic only)
+_THINKING_EFFORTS: frozenset[str] = frozenset({"xhigh", "max"})
+
+# Anthropic models that support extended thinking
+_THINKING_CAPABLE_MODELS: frozenset[str] = frozenset({
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+})
+
+# ---------------------------------------------------------------------------
 # Shared types
 # ---------------------------------------------------------------------------
 
@@ -63,6 +91,7 @@ class ToolDef:
 class LLMResponse:
     content: str
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    thinking: str = ""   # extended thinking text (Anthropic only; Phase 15)
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
@@ -324,13 +353,17 @@ class LLMClient:
     # Ollama
     # ------------------------------------------------------------------
 
+    def _effort_temperature(self) -> float:
+        effort = self.cfg.effort
+        return _EFFORT_TEMPERATURE.get(effort, self.cfg.temperature)
+
     def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
         import ollama
 
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": _to_openai_messages(messages),
-            "options": {"temperature": self.cfg.temperature},
+            "options": {"temperature": self._effort_temperature()},
         }
         if tools:
             kwargs["tools"] = _to_openai_tools(tools)
@@ -367,7 +400,7 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": _to_openai_messages(messages),
-            "options": {"temperature": self.cfg.temperature},
+            "options": {"temperature": self._effort_temperature()},
             "stream": True,
         }
         if tools:
@@ -397,7 +430,7 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": _to_openai_messages(messages),
-            "temperature": self.cfg.temperature,
+            "temperature": self._effort_temperature(),
         }
         if tools:
             kwargs["tools"] = _to_openai_tools(tools)
@@ -444,7 +477,7 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": _to_openai_messages(messages),
-            "temperature": self.cfg.temperature,
+            "temperature": self._effort_temperature(),
             "stream": True,
         }
         if tools:
@@ -461,6 +494,33 @@ class LLMClient:
     # Anthropic
     # ------------------------------------------------------------------
 
+    def _anthropic_kwargs(self) -> tuple[dict[str, Any], bool]:
+        """Build common Anthropic kwargs from effort + thinking config.
+
+        Returns (kwargs_dict, thinking_enabled).
+        """
+        effort = self.cfg.effort
+        max_tokens = _EFFORT_MAX_TOKENS.get(effort, 8_192)
+
+        use_thinking = (
+            effort in _THINKING_EFFORTS
+            and self.cfg.extended_thinking
+            and self.cfg.model in _THINKING_CAPABLE_MODELS
+        )
+
+        kwargs: dict[str, Any] = {
+            "model": self.cfg.model,
+            "max_tokens": max_tokens,
+        }
+        if use_thinking:
+            budget = min(self.cfg.thinking_budget_tokens, max_tokens - 1_024)
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            # Anthropic forbids temperature when thinking is enabled
+        else:
+            kwargs["temperature"] = _EFFORT_TEMPERATURE.get(effort, self.cfg.temperature)
+
+        return kwargs, use_thinking
+
     def _anthropic(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
         import anthropic
 
@@ -468,12 +528,8 @@ class LLMClient:
         system = next((m.content for m in messages if m.role == "system"), "")
         chat_msgs = _to_anthropic_messages(messages)
 
-        kwargs: dict[str, Any] = {
-            "model": self.cfg.model,
-            "max_tokens": 8096,
-            "messages": chat_msgs,
-            "temperature": self.cfg.temperature,
-        }
+        kwargs, _ = self._anthropic_kwargs()
+        kwargs["messages"] = chat_msgs
         if system:
             kwargs["system"] = system
         if tools:
@@ -482,10 +538,13 @@ class LLMClient:
         resp = client.messages.create(**kwargs)
 
         text_content = ""
+        thinking_text = ""
         tool_calls: list[ToolCallRequest] = []
         for block in resp.content:
             if block.type == "text":
                 text_content += block.text
+            elif block.type == "thinking":
+                thinking_text += block.thinking
             elif block.type == "tool_use":
                 tool_calls.append(ToolCallRequest(
                     id=block.id,
@@ -496,6 +555,7 @@ class LLMClient:
         return LLMResponse(
             content=text_content,
             tool_calls=tool_calls,
+            thinking=thinking_text,
             input_tokens=resp.usage.input_tokens,
             output_tokens=resp.usage.output_tokens,
             model=self.cfg.model,
@@ -513,20 +573,40 @@ class LLMClient:
         system = next((m.content for m in messages if m.role == "system"), "")
         chat_msgs = _to_anthropic_messages(messages)
 
-        kwargs: dict[str, Any] = {
-            "model": self.cfg.model,
-            "max_tokens": 8096,
-            "messages": chat_msgs,
-            "temperature": self.cfg.temperature,
-        }
+        kwargs, use_thinking = self._anthropic_kwargs()
+        kwargs["messages"] = chat_msgs
         if system:
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = _to_anthropic_tools(tools)
 
-        async with client.messages.stream(**kwargs) as stream:
-            async for text in stream.text_stream:
-                yield text
+        if use_thinking:
+            # Stream raw events so we can surface thinking blocks with markers
+            async with client.messages.stream(**kwargs) as stream:
+                in_thinking = False
+                async for event in stream:
+                    etype = getattr(event, "type", "")
+                    if etype == "content_block_start":
+                        block = getattr(event, "content_block", None)
+                        if block and getattr(block, "type", "") == "thinking":
+                            in_thinking = True
+                            yield "<thinking>\n"
+                    elif etype == "content_block_stop":
+                        if in_thinking:
+                            in_thinking = False
+                            yield "\n</thinking>\n"
+                    elif etype == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta:
+                            dtype = getattr(delta, "type", "")
+                            if dtype == "thinking_delta":
+                                yield getattr(delta, "thinking", "")
+                            elif dtype == "text_delta":
+                                yield getattr(delta, "text", "")
+        else:
+            async with client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    yield text
 
     # ------------------------------------------------------------------
     # Gemini (no tool calling yet -- text only)
