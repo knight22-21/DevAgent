@@ -30,6 +30,11 @@ from devagent.agent.loop import (
 console = Console()
 
 
+def render_diff(diff_text: str) -> None:
+    """Public wrapper around _render_diff — for use outside this module."""
+    _render_diff(diff_text)
+
+
 def render_events(
     events: Generator[AgentEvent, None, None],
     permission_mgr=None,   # PermissionManager | None
@@ -107,6 +112,26 @@ def _render_tool_result(event: ToolResultEvent) -> None:
             expand=False,
         )
     )
+
+    if event.diff:
+        _render_diff(event.diff)
+
+
+def _render_diff(diff_text: str) -> None:
+    """Render a unified diff with colour-coded additions and removals."""
+    output = Text()
+    for line in diff_text.splitlines():
+        if line.startswith(("+++", "---")):
+            output.append(line + "\n", style="bold dim")
+        elif line.startswith("+"):
+            output.append(line + "\n", style="green")
+        elif line.startswith("-"):
+            output.append(line + "\n", style="red")
+        elif line.startswith("@@"):
+            output.append(line + "\n", style="cyan dim")
+        else:
+            output.append(line + "\n", style="dim")
+    console.print(output)
 
 
 def _render_final_answer(event: FinalAnswerEvent) -> None:
