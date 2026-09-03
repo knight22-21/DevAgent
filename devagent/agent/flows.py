@@ -210,6 +210,13 @@ class DevAgentSession:
         from devagent.tools.memory_tools import register_memory_tools
         register_memory_tools(registry, memory)
 
+        # ── Undo stack (Phase 13) ─────────────────────────────────────
+        # Each entry: {"path": str, "before": str | None}
+        # before=None means the file did not exist before the write (new file).
+        self._undo_stack: list[dict] = []
+        self._last_diff: str = ""
+        self._wrap_file_tools_for_undo(registry)
+
         devagent_md = load_devagent_md(self._project_root)
         system_prompt = build_system_prompt(
             project_description=f"Project: {self._project_root.name}",
@@ -242,6 +249,40 @@ class DevAgentSession:
         self._title_set = resume_id is not None
         self._plan_mode = plan_mode
         self._llm = LLMClient(cfg.llm)  # kept for plan generation
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _wrap_file_tools_for_undo(self, registry) -> None:
+        """Wrap edit_file and write_file to capture before-state for /undo."""
+        _UNDO_TOOLS = ("edit_file", "write_file")
+        _MAX_UNDO = 20
+
+        for tool_name in _UNDO_TOOLS:
+            original = registry._handlers.get(tool_name)
+            if original is None:
+                continue
+
+            def _make_wrapper(fn: object, tn: str):
+                def wrapper(args: dict) -> str:
+                    path = args.get("path", "")
+                    target = self._project_root / path
+                    before: str | None = None
+                    try:
+                        if target.exists():
+                            before = target.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+                    result: str = fn(args)  # type: ignore[operator]
+                    if not result.startswith("[error]") and not result.startswith("[tool_error]"):
+                        self._undo_stack.append({"path": path, "before": before, "tool": tn})
+                        if len(self._undo_stack) > _MAX_UNDO:
+                            self._undo_stack.pop(0)
+                    return result
+                return wrapper
+
+            registry._handlers[tool_name] = _make_wrapper(original, tool_name)
 
     # ------------------------------------------------------------------
     # Public API
@@ -302,7 +343,16 @@ class DevAgentSession:
                     final = event.text
             return final
 
-        return render_events(self._loop.run(message), permission_mgr=self._permission_mgr)
+        # Tee the event stream to capture the most recent diff for /diff command
+        from devagent.agent.loop import ToolResultEvent as _TRE
+
+        def _tee(gen):
+            for event in gen:
+                if isinstance(event, _TRE) and event.diff:
+                    self._last_diff = event.diff
+                yield event
+
+        return render_events(_tee(self._loop.run(message)), permission_mgr=self._permission_mgr)
 
     def interactive_repl(self, *, first_message: str | None = None) -> None:
         """Run the interactive REPL, optionally seeding with first_message."""
@@ -321,12 +371,52 @@ class DevAgentSession:
             if not raw:
                 continue
 
+            # Phase 13 — shell escape: !<command> runs in the project root
+            if raw.startswith("!"):
+                import subprocess
+                shell_cmd = raw[1:].strip()
+                if shell_cmd:
+                    proc = subprocess.run(
+                        shell_cmd, shell=True, capture_output=True, text=True,
+                        cwd=str(self._project_root),
+                    )
+                    if proc.stdout:
+                        self._console.print(proc.stdout, end="")
+                    if proc.stderr:
+                        self._console.print(proc.stderr, style="dim red", end="")
+                continue
+
             cmd = raw.lower()
 
             if cmd in ("/exit", "/quit", "exit", "quit"):
                 self._console.print("[dim]Session ended.[/dim]")
                 self._print_exit()
                 break
+
+            # Phase 13 — /undo: restore the last file the agent wrote or edited
+            if cmd == "/undo":
+                if not self._undo_stack:
+                    self._console.print("[yellow]Nothing to undo.[/yellow]")
+                else:
+                    entry = self._undo_stack.pop()
+                    path, before = entry["path"], entry["before"]
+                    target = self._project_root / path
+                    if before is None:
+                        target.unlink(missing_ok=True)
+                        self._console.print(f"[green]Undone:[/green] deleted {path} (was a new file)")
+                    else:
+                        target.write_text(before, encoding="utf-8")
+                        self._console.print(f"[green]Undone:[/green] restored {path}")
+                continue
+
+            # Phase 13 — /diff: replay the last inline diff
+            if cmd == "/diff":
+                if not self._last_diff:
+                    self._console.print("[dim]No diff recorded yet.[/dim]")
+                else:
+                    from devagent.output.streaming import render_diff
+                    render_diff(self._last_diff)
+                continue
 
             if cmd == "/memory":
                 mem = self._memory.all()
@@ -373,7 +463,12 @@ class DevAgentSession:
                     for sn, sk in skills.items():
                         self._console.print(f"  [cyan]/{sn}[/cyan]  {sk.description}")
                     self._console.print()
-                    self._console.print("[dim]Built-in: /memory  /tokens  /security  /exit[/dim]")
+                    self._console.print(
+                        "[dim]Built-in: /memory  /tokens  /security  /undo  /diff  /exit[/dim]"
+                    )
+                    self._console.print(
+                        "[dim]Shell:    !<command>  — run a shell command in the project root[/dim]"
+                    )
                     continue
 
                 if skill_name in skills:
@@ -420,7 +515,7 @@ class DevAgentSession:
                 f"[dim]Project: {self._project_root}[/dim]\n"
                 f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
                 "[dim]Skills: /explain  /test  /review  /commit  /summarize  /help[/dim]\n"
-                "[dim]Commands: /memory  /tokens  /security  /exit[/dim]",
+                "[dim]Commands: /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd> shell escape[/dim]",
                 border_style="cyan",
             )
         )

@@ -7,9 +7,15 @@ in any coding agent loop.
 
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 
 from devagent.tools.registry import ToolRegistry
+
+# Separator used to embed a unified diff in the tool result string.
+# The agent loop splits on this to keep the LLM-facing result clean while
+# letting the renderer show a colour-coded diff panel.
+_DIFF_SEP = "\n---diff---\n"
 
 
 def _safe_resolve(project_root: str, path: str) -> Path:
@@ -45,8 +51,16 @@ def register_file_tools(registry: ToolRegistry, project_root: str = ".") -> None
         try:
             target = _safe_resolve(project_root, path)
             target.parent.mkdir(parents=True, exist_ok=True)
+            before_lines: list[str] = []
+            if target.exists():
+                before_lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
             target.write_text(content, encoding="utf-8")
-            return f"Written {len(content)} bytes to {path}"
+            after_lines = content.splitlines(keepends=True)
+            diff = "".join(
+                difflib.unified_diff(before_lines, after_lines, fromfile=f"a/{path}", tofile=f"b/{path}", n=3)
+            )
+            msg = f"Written {len(content)} bytes to {path}"
+            return f"{msg}{_DIFF_SEP}{diff}" if diff else msg
         except Exception as exc:
             return f"[error] {exc}"
 
@@ -64,7 +78,17 @@ def register_file_tools(registry: ToolRegistry, project_root: str = ".") -> None
                 return f"[error] old_str found {count} times — be more specific"
             updated = original.replace(old_str, new_str, 1)
             target.write_text(updated, encoding="utf-8")
-            return f"Edited {path}: replaced 1 occurrence"
+            diff = "".join(
+                difflib.unified_diff(
+                    original.splitlines(keepends=True),
+                    updated.splitlines(keepends=True),
+                    fromfile=f"a/{path}",
+                    tofile=f"b/{path}",
+                    n=3,
+                )
+            )
+            msg = f"Edited {path}: replaced 1 occurrence"
+            return f"{msg}{_DIFF_SEP}{diff}" if diff else msg
         except Exception as exc:
             return f"[error] {exc}"
 

@@ -70,6 +70,7 @@ class ToolResultEvent:
     name: str
     result: str
     success: bool = True
+    diff: str = ""  # unified diff text (Phase 13); empty when not a file edit
 
 
 @dataclass
@@ -327,7 +328,10 @@ class AgentLoop:
                                 )
                                 continue
 
-                    result = self.registry.call(tc.name, tc.args)
+                    raw = self.registry.call(tc.name, tc.args)
+
+                    # Split diff from the clean result so the LLM history stays lean
+                    result, _, diff = raw.partition("\n---diff---\n")
 
                     # Auto-test repair loop: after every file write, run relevant tests
                     if tc.name in _WRITE_TOOL_NAMES:
@@ -338,9 +342,9 @@ class AgentLoop:
 
                     success = not result.startswith("[error]") and not result.startswith("[blocked]")
 
-                    yield ToolResultEvent(id=tc.id, name=tc.name, result=result, success=success)
+                    yield ToolResultEvent(id=tc.id, name=tc.name, result=result, success=success, diff=diff)
 
-                    # Persist tool result
+                    # Persist only the clean result (no diff noise for the LLM)
                     self.session_mgr.record_tool_result(
                         self.session_id,
                         tool_call_id=tc.id,
