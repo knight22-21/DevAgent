@@ -146,6 +146,7 @@ class AgentLoop:
         max_iterations: int = 0,      # 0 = use _DEFAULT_MAX_ITERATIONS; pass cfg value
         loop_detection: bool = True,
         permission_mgr: PermissionManager | None = None,
+        bare: bool = False,           # Phase 15: skip memory/overlay injection
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -160,6 +161,7 @@ class AgentLoop:
         self._max_iterations = max_iterations if max_iterations > 0 else _DEFAULT_MAX_ITERATIONS
         self._loop_detection = loop_detection
         self._permission_mgr = permission_mgr
+        self._bare = bare
         # Loop detection: ring buffer of (tool_name, args_fingerprint) pairs
         self._recent_calls: list[tuple[str, str]] = []
 
@@ -176,17 +178,18 @@ class AgentLoop:
         last_tool_names: list[str] = []
 
         # Reload full system prompt with latest memory + session overlay
-        memory_block = self.memory.as_prompt_block()
         full_system = self.system_prompt
-        if memory_block:
-            full_system = full_system + memory_block
+        if not self._bare:
+            memory_block = self.memory.as_prompt_block()
+            if memory_block:
+                full_system = full_system + memory_block
 
         while iteration < self._max_iterations:
             iteration += 1
 
-            # Refresh session overlay from CodePrism each turn
+            # Refresh session overlay from CodePrism each turn (skipped in bare mode)
             current_system = full_system
-            if _HAS_CODEPRISM and self._cp_client:
+            if not self._bare and _HAS_CODEPRISM and self._cp_client:
                 overlay = build_session_overlay(self._cp_client)
                 if overlay:
                     current_system = full_system + overlay
@@ -241,7 +244,11 @@ class AgentLoop:
                         limit=self.budget.max_tokens,
                     )
 
-            # Emit thinking text if any
+            # Extended thinking blocks (Anthropic only, Phase 15)
+            if response.thinking:
+                yield ThinkingEvent(f"<thinking>\n{response.thinking}\n</thinking>")
+
+            # Emit regular reasoning text if any
             if response.content:
                 yield ThinkingEvent(response.content)
 
