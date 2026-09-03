@@ -112,6 +112,11 @@ class DevAgentSession:
         allow: list[str] | None = None,   # Phase 10: auto-allow patterns
         deny: list[str] | None = None,    # Phase 10: auto-deny patterns
         interactive_approval: bool = False,  # Phase 10: pause for approval when no rule matches
+        # Phase 15 — effort, bare mode, CI hardening
+        effort: str | None = None,
+        bare: bool = False,
+        allow_tools: list[str] | None = None,
+        output_format: str = "rich",
     ) -> None:
         from devagent.agent import permissions as perm_registry
         from devagent.agent.loop import AgentLoop
@@ -127,6 +132,11 @@ class DevAgentSession:
         self._project_root = Path(project_root).resolve()
         self._console = Console()
         self.security_log: list = []
+        self._output_format = output_format
+
+        # Apply effort override before anything reads cfg.llm.effort
+        if effort is not None:
+            cfg.llm.effort = effort
 
         # ── Session ──────────────────────────────────────────────────
         mgr = SessionManager()
@@ -145,29 +155,33 @@ class DevAgentSession:
         self._mgr = mgr
         self.session_id = session_id
 
-        # ── Permission manager (Phase 10) ─────────────────────────────
+        # ── Permission manager (Phase 10 / Phase 15) ─────────────────
         rules = []
         for spec in (deny or []):
             rules.append(parse_rule(spec, "deny"))
         for spec in (allow or []):
             rules.append(parse_rule(spec, "allow"))
+        # --allow-tools is a shorthand: auto-allow exact tool name matches
+        for tool_name in (allow_tools or []):
+            rules.append(parse_rule(tool_name, "allow"))
         self._permission_mgr: PermissionManager | None = None
-        if rules or interactive_approval:
+        if not bare and (rules or interactive_approval):
             self._permission_mgr = PermissionManager(
                 rules=rules, interactive=interactive_approval
             )
             perm_registry.register(session_id, self._permission_mgr)
 
-        # ── CodePrism (optional) ─────────────────────────────────────
+        # ── CodePrism (optional; skipped in bare mode) ───────────────
         cp_client = None
-        try:
-            from devagent.codeprism.client import CodePrismClient
-            cp = CodePrismClient(str(self._project_root))
-            if cp.is_indexed:
-                cp.attach_session(session_id)
-                cp_client = cp
-        except Exception:
-            pass
+        if not bare:
+            try:
+                from devagent.codeprism.client import CodePrismClient
+                cp = CodePrismClient(str(self._project_root))
+                if cp.is_indexed:
+                    cp.attach_session(session_id)
+                    cp_client = cp
+            except Exception:
+                pass
         self._cp_client = cp_client
 
         # ── Security gate confirm callback ────────────────────────────
@@ -221,7 +235,8 @@ class DevAgentSession:
         self._last_diff: str = ""
         self._wrap_file_tools_for_undo(registry)
 
-        devagent_md = load_devagent_md(self._project_root)
+        # Bare mode: omit DEVAGENT.md from the system prompt
+        devagent_md = "" if bare else load_devagent_md(self._project_root)
         system_prompt = build_system_prompt(
             project_description=f"Project: {self._project_root.name}",
             extra_context=extra_system,
@@ -244,7 +259,12 @@ class DevAgentSession:
             max_iterations=max_iters,
             loop_detection=cfg.agent.loop_detection,
             permission_mgr=self._permission_mgr,
+            bare=bare,
         )
+
+        # Phase 15 — expose effort and bare for REPL commands
+        self._bare = bare
+        self._llm_client = llm  # kept so /effort and /think can mutate cfg.llm live
 
         # Status flags for the REPL
         self._cp_active = cp_client is not None
@@ -422,6 +442,38 @@ class DevAgentSession:
                     render_diff(self._last_diff)
                 continue
 
+            # Phase 15 — /effort: change effort level for the rest of the session
+            if cmd.startswith("/effort"):
+                parts = raw.split(None, 1)
+                valid = ("low", "medium", "high", "xhigh", "max")
+                if len(parts) < 2 or parts[1].strip().lower() not in valid:
+                    current = self._cfg.llm.effort
+                    self._console.print(
+                        f"[dim]Current effort: [bold]{current}[/bold]\n"
+                        f"Usage: /effort low|medium|high|xhigh|max[/dim]"
+                    )
+                else:
+                    new_effort = parts[1].strip().lower()
+                    self._cfg.llm.effort = new_effort
+                    self._console.print(f"[dim]Effort set to [bold]{new_effort}[/bold][/dim]")
+                continue
+
+            # Phase 15 — /think: toggle extended thinking (Anthropic only)
+            if cmd.startswith("/think"):
+                parts = raw.split(None, 1)
+                if len(parts) < 2 or parts[1].strip().lower() not in ("on", "off"):
+                    state = "on" if self._cfg.llm.extended_thinking else "off"
+                    self._console.print(
+                        f"[dim]Extended thinking: [bold]{state}[/bold]\n"
+                        f"Usage: /think on|off  (Anthropic only; auto-activates for xhigh/max effort)[/dim]"
+                    )
+                else:
+                    enable = parts[1].strip().lower() == "on"
+                    self._cfg.llm.extended_thinking = enable
+                    state = "enabled" if enable else "disabled"
+                    self._console.print(f"[dim]Extended thinking {state}[/dim]")
+                continue
+
             if cmd == "/memory":
                 mem = self._memory.all()
                 if mem:
@@ -471,6 +523,12 @@ class DevAgentSession:
                         "[dim]Built-in: /memory  /tokens  /security  /undo  /diff  /exit[/dim]"
                     )
                     self._console.print(
+                        "[dim]Effort:   /effort low|medium|high|xhigh|max  — change effort level[/dim]"
+                    )
+                    self._console.print(
+                        "[dim]Thinking: /think on|off  — toggle extended thinking (Anthropic)[/dim]"
+                    )
+                    self._console.print(
                         "[dim]Shell:    !<command>  — run a shell command in the project root[/dim]"
                     )
                     continue
@@ -512,14 +570,18 @@ class DevAgentSession:
         gh = "active" if self._gh_active else "no token"
         router = "active" if self._router_active else "off"
         mode = "local (offline)" if self._cfg.llm.provider == "ollama" else f"cloud ({self._cfg.llm.provider})"
+        effort = self._cfg.llm.effort
+        think_suffix = " + thinking" if self._cfg.llm.extended_thinking else ""
+        bare_suffix = "  [dim][bare][/dim]" if self._bare else ""
         self._console.print(
             Panel(
                 f"[bold cyan]{title}[/bold cyan]  |  "
-                f"{self._cfg.llm.provider}/{self._cfg.llm.model}  |  mode: {mode}\n"
+                f"{self._cfg.llm.provider}/{self._cfg.llm.model}  |  mode: {mode}"
+                f"  |  effort: {effort}{think_suffix}{bare_suffix}\n"
                 f"[dim]Project: {self._project_root}[/dim]\n"
                 f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
                 "[dim]Skills: /explain  /test  /review  /commit  /summarize  /help[/dim]\n"
-                "[dim]Commands: /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd> shell escape[/dim]",
+                "[dim]Commands: /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd> shell escape[/dim]",
                 border_style="cyan",
             )
         )
