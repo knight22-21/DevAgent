@@ -30,6 +30,10 @@ class LLMConfig(BaseModel):
     temperature: float = 0.1
     api_key: str = ""
     fallback: LLMFallbackConfig | None = None
+    # Phase 15 — effort levels and extended thinking
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    extended_thinking: bool = False
+    thinking_budget_tokens: int = 10_000
 
 
 class GitHubConfig(BaseModel):
