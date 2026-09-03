@@ -1514,6 +1514,16 @@ def run(
     interactive_approval: bool = typer.Option(
         False, "--interactive-approval", help="Pause and ask before every unmatched tool call"
     ),
+    effort: str | None = typer.Option(
+        None, "--effort", help="Effort level: low|medium|high|xhigh|max"
+    ),
+    bare: bool = typer.Option(
+        False, "--bare", help="Skip DEVAGENT.md, memory injection, CodePrism overlay, and permission gate"
+    ),
+    allow_tools: str | None = typer.Option(
+        None, "--allow-tools",
+        help="Comma-separated tool names to auto-approve (e.g. 'run_shell,write_file')"
+    ),
 ) -> None:
     """Start an interactive agent session (the main DevAgent command)."""
     from devagent.agent.flows import DevAgentSession
@@ -1528,6 +1538,7 @@ def run(
         cfg.llm.model = model
 
     project_root, _ = detect_project_root(Path(project) if project else None)
+    tools_list = [t.strip() for t in allow_tools.split(",")] if allow_tools else None
 
     try:
         session = DevAgentSession(
@@ -1540,6 +1551,9 @@ def run(
             allow=list(allow),
             deny=list(deny),
             interactive_approval=interactive_approval,
+            effort=effort,
+            bare=bare,
+            allow_tools=tools_list,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1573,12 +1587,20 @@ def do(
     max_tokens: int | None = typer.Option(None, "--max-tokens", help="Token budget"),
     no_session: bool = typer.Option(False, "--no-session", help="Skip persisting session to SQLite"),
     no_limit: bool = typer.Option(False, "--no-limit", help="Remove the iteration cap"),
+    effort: str | None = typer.Option(None, "--effort", help="Effort level: low|medium|high|xhigh|max"),
+    bare: bool = typer.Option(False, "--bare", help="Skip DEVAGENT.md, memory, CodePrism, and permission gate"),
+    allow_tools: str | None = typer.Option(
+        None, "--allow-tools", help="Comma-separated tool names to auto-approve"
+    ),
+    output_format: str = typer.Option(
+        "rich", "--output-format", help="Output format: rich (default) or stream-json"
+    ),
 ) -> None:
     """Run a single task non-interactively and exit (exit code 0=success, 1=error)."""
     from devagent.agent.flows import DevAgentSession
     from devagent.agent.loop import ErrorEvent
     from devagent.core.project import detect_project_root
-    from devagent.output.streaming import render_events
+    from devagent.output.streaming import render_events, stream_json_events
 
     if not config_exists():
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
@@ -1589,6 +1611,7 @@ def do(
         cfg.llm.model = model
 
     project_root, _ = detect_project_root(Path(project) if project else None)
+    tools_list = [t.strip() for t in allow_tools.split(",")] if allow_tools else None
 
     try:
         session = DevAgentSession(
@@ -1596,6 +1619,9 @@ def do(
             project_root,
             max_tokens=max_tokens,
             no_limit=no_limit,
+            effort=effort,
+            bare=bare,
+            allow_tools=tools_list,
         )
     except Exception as exc:
         _handle_error(exc)
@@ -1603,8 +1629,11 @@ def do(
 
     # Collect all events, render them, then determine exit code
     events = list(session._loop.run(task))
-    # Record the user message so session is properly stored
-    render_events(iter(events))
+
+    if output_format == "stream-json":
+        stream_json_events(iter(events))
+    else:
+        render_events(iter(events))
 
     # Clean up session record if --no-session requested
     if no_session:

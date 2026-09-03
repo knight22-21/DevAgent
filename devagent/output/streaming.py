@@ -66,6 +66,40 @@ def render_events(
     return final_text
 
 
+def stream_json_events(
+    events: Generator[AgentEvent, None, None],
+) -> str:
+    """Emit each agent event as a JSON line to stdout (for CI / machine parsing).
+
+    Returns the final text answer (or empty string on error).
+    """
+    import sys
+
+    final_text = ""
+    for event in events:
+        if isinstance(event, ThinkingEvent):
+            obj = {"type": "thinking", "text": event.text}
+        elif isinstance(event, ToolCallEvent):
+            obj = {"type": "tool_call", "id": event.id, "name": event.name, "args": event.args}
+        elif isinstance(event, ToolResultEvent):
+            obj = {"type": "tool_result", "id": event.id, "name": event.name,
+                   "result": event.result, "success": event.success}
+        elif isinstance(event, FinalAnswerEvent):
+            obj = {"type": "final", "text": event.text}
+            final_text = event.text
+        elif isinstance(event, BudgetWarningEvent):
+            obj = {"type": "budget_warning", "used": event.used, "remaining": event.remaining}
+        elif isinstance(event, StatusEvent):
+            obj = {"type": "status", "status_line": event.status_line, "iteration": event.iteration}
+        elif isinstance(event, ErrorEvent):
+            obj = {"type": "error", "message": event.message}
+        else:
+            continue
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+    return final_text
+
+
 def _render_thinking(event: ThinkingEvent) -> None:
     """Render reasoning/thinking text in a subtle style."""
     if not event.text.strip():
