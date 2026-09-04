@@ -63,6 +63,8 @@ def build_registry(
     security_log: list | None = None,
     confirm_fn=None,                 # Callable[[str], bool] | None
     github_token: str | None = None,
+    session_id: str | None = None,   # Phase 16: enables todo_* tools
+    provider: str = "ollama",        # Phase 16: controls image encoding in vision tools
 ) -> ToolRegistry:
     """Build and return the default tool registry with all built-in tools.
 
@@ -70,6 +72,8 @@ def build_registry(
     security_log:     caller-owned list; security gate appends events to it.
     confirm_fn:       called on WARN-level writes; returns True to proceed.
     github_token:     enables all gh_* GitHub API tools.
+    session_id:       enables todo_write / todo_read (Phase 16).
+    provider:         LLM provider name; controls image content encoding (Phase 16).
     """
     from devagent.tools.file_tools import register_file_tools
     from devagent.tools.git_tools import register_git_tools
@@ -103,5 +107,23 @@ def build_registry(
     if github_token:
         from devagent.tools.github_tools import register_github_tools
         register_github_tools(registry, github_token)
+
+    # Phase 16 — Vision tools (always registered; provider controls image encoding)
+    from devagent.tools.vision_tools import register_vision_tools
+    register_vision_tools(registry, project_root, provider=provider)
+
+    # Phase 16 — Notebook tools (optional: requires nbformat)
+    try:
+        import nbformat  # noqa: F401
+
+        from devagent.tools.notebook_tools import register_notebook_tools
+        register_notebook_tools(registry, project_root)
+    except ImportError:
+        pass
+
+    # Phase 16 — Todo tools (optional: requires a session_id)
+    if session_id:
+        from devagent.tools.todo_tools import register_todo_tools
+        register_todo_tools(registry, session_id)
 
     return registry
