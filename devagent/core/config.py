@@ -48,8 +48,9 @@ class BraveConfig(BaseModel):
 
 
 class SearchXConfig(BaseModel):
-    """SearchX API configuration."""
+    """SearchX API configuration (SearXNG-compatible self-hosted metasearch)."""
     api_key: str = ""
+    base_url: str = "http://localhost:8888"
 
 
 class OutputConfig(BaseModel):
