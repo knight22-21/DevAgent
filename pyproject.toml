@@ -60,6 +60,9 @@ dev = [
     "pytest-asyncio",
     "ruff",
 ]
+notebooks = [
+    "nbformat>=5.10.0",
+]
 
 [tool.ruff]
 line-length = 100
