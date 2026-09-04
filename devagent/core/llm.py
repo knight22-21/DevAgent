@@ -20,6 +20,13 @@ from typing import Any
 from devagent.core.config import DevAgentConfig, LLMConfig
 
 # ---------------------------------------------------------------------------
+# Image sentinel (Phase 16 — vision tools)
+# Shared with devagent/tools/vision_tools.py — same value, no circular import.
+# ---------------------------------------------------------------------------
+
+_IMAGE_SENTINEL = "\n__image__:"
+
+# ---------------------------------------------------------------------------
 # Effort-level tables
 # ---------------------------------------------------------------------------
 
@@ -148,11 +155,15 @@ def _to_openai_messages(messages: list[AgentMessage]) -> list[dict]:
     result = []
     for msg in messages:
         if msg.role == "tool_result":
+            # OpenAI tool messages don't support image content blocks — strip sentinel
+            content = msg.content
+            if _IMAGE_SENTINEL in content:
+                content = content.split(_IMAGE_SENTINEL, 1)[0]
             result.append({
                 "role": "tool",
                 "tool_call_id": msg.tool_call_id,
                 "name": msg.tool_name,
-                "content": msg.content,
+                "content": content,
             })
         elif msg.role == "assistant" and msg.tool_calls:
             result.append({
@@ -186,11 +197,32 @@ def _to_anthropic_messages(messages: list[AgentMessage]) -> list[dict]:
             continue  # handled separately
 
         if msg.role == "tool_result":
-            pending_tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": msg.tool_call_id,
-                "content": msg.content,
-            })
+            content = msg.content
+            if _IMAGE_SENTINEL in content:
+                text_part, rest = content.split(_IMAGE_SENTINEL, 1)
+                media_type, b64_data = rest.split(":", 1)
+                image_content: list[dict] = []
+                if text_part:
+                    image_content.append({"type": "text", "text": text_part})
+                image_content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64_data,
+                    },
+                })
+                pending_tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": msg.tool_call_id,
+                    "content": image_content,
+                })
+            else:
+                pending_tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": msg.tool_call_id,
+                    "content": content,
+                })
             continue
 
         # Flush pending tool results before any non-tool_result message
