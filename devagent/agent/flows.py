@@ -197,6 +197,12 @@ class DevAgentSession:
             security_log=self.security_log,
             confirm_fn=_confirm if cp_client else None,
             github_token=gh_token,
+            session_id=session_id,
+            provider=cfg.llm.provider,
+            brave_api_key=cfg.brave.api_key,
+            searchx_api_key=cfg.searchx.api_key,
+            searchx_base_url=cfg.searchx.base_url,
+            search_provider=cfg.search_provider,
         )
 
         # ── Multi-model router (optional) ─────────────────────────────
