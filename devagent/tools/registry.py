@@ -65,15 +65,24 @@ def build_registry(
     github_token: str | None = None,
     session_id: str | None = None,   # Phase 16: enables todo_* tools
     provider: str = "ollama",        # Phase 16: controls image encoding in vision tools
+    # Phase 11 — web tools
+    brave_api_key: str = "",
+    searchx_api_key: str = "",
+    searchx_base_url: str = "http://localhost:8888",
+    search_provider: str = "searchx",
 ) -> ToolRegistry:
     """Build and return the default tool registry with all built-in tools.
 
-    codeprism_client: enables cp_* graph tools + security gate on writes.
-    security_log:     caller-owned list; security gate appends events to it.
-    confirm_fn:       called on WARN-level writes; returns True to proceed.
-    github_token:     enables all gh_* GitHub API tools.
-    session_id:       enables todo_write / todo_read (Phase 16).
-    provider:         LLM provider name; controls image content encoding (Phase 16).
+    codeprism_client:  enables cp_* graph tools + security gate on writes.
+    security_log:      caller-owned list; security gate appends events to it.
+    confirm_fn:        called on WARN-level writes; returns True to proceed.
+    github_token:      enables all gh_* GitHub API tools.
+    session_id:        enables todo_write / todo_read (Phase 16).
+    provider:          LLM provider name; controls image content encoding (Phase 16).
+    brave_api_key:     enables web_search via Brave Search API (Phase 11).
+    searchx_api_key:   enables web_search via SearchX (Phase 11).
+    searchx_base_url:  base URL of the SearchX instance (Phase 11).
+    search_provider:   active search provider: 'brave' or 'searchx' (Phase 11).
     """
     from devagent.tools.file_tools import register_file_tools
     from devagent.tools.git_tools import register_git_tools
@@ -107,6 +116,16 @@ def build_registry(
     if github_token:
         from devagent.tools.github_tools import register_github_tools
         register_github_tools(registry, github_token)
+
+    # Phase 11 — Web tools (fetch_url always; web_search when keys/base_url configured)
+    from devagent.tools.web_tools import register_web_tools
+    register_web_tools(
+        registry,
+        brave_api_key=brave_api_key,
+        searchx_api_key=searchx_api_key,
+        searchx_base_url=searchx_base_url,
+        search_provider=search_provider,
+    )
 
     # Phase 16 — Vision tools (always registered; provider controls image encoding)
     from devagent.tools.vision_tools import register_vision_tools
