@@ -514,7 +514,7 @@ class TestSweepLive:
                 from devagent.bench.runner import BenchRunner
                 return BenchRunner.load_tasks(difficulty="easy")[:1]
 
-            def __init__(self, tasks, dry_run, model=None, max_iterations=None):
+            def __init__(self, tasks, dry_run, provider=None, model=None, max_iterations=None):
                 captured["dry_run"] = dry_run
 
             def run_all(self):
