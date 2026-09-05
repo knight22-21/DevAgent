@@ -129,7 +129,7 @@ class BenchRunner:
 
         if not self.dry_run:
             _console.print(
-                f"  [cyan]▶[/cyan] [dim]{task.id}[/dim]  {task.description[:72].rstrip()}…"
+                f"  [cyan]>>[/cyan] [dim]{task.id}[/dim]  {task.description[:72].rstrip()}"
             )
 
         with tempfile.TemporaryDirectory(prefix="devagent_bench_") as tmp:
@@ -175,8 +175,6 @@ class BenchRunner:
     def _run_live(self, task: Task, work_dir: Path) -> TaskResult:
         """Live run — invoke the DevAgent loop, then evaluate the oracle."""
         from devagent.agent.flows import DevAgentSession
-        from devagent.core.config import load_config
-
         from devagent.core.config import RouterConfig, load_config
 
         cfg = load_config()

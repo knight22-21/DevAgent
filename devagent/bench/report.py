@@ -29,7 +29,7 @@ class BenchReport:
         table.add_column("Error / Output", style="dim", max_width=50)
 
         for r in results:
-            status = "[green]✓[/green]" if r.passed else "[red]✗[/red]"
+            status = "[green]ok[/green]" if r.passed else "[red]FAIL[/red]"
             detail = r.error or r.oracle_output or ""
             table.add_row(
                 r.task_id,
