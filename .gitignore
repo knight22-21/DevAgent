@@ -1,9 +1,8 @@
 # Claude Code project instructions (local only — not for version control)
 CLAUDE.md
 
-# Internal research / comparison docs
-CLAUDE_CODE_VS_DEVAGENT.md
-DEVAGENT_APP_PLAN.md
+# All internal planning, research, and spec docs live in plans/
+plans/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -223,14 +222,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-PROJECT.md
-FEATURES_F4_F2.md
-FEATURE_F3.md
-CODEPRISM_SPEC.md
-DEVAGENT_ROADMAP.md
 
-# Private developer documentation (personal notes, internal diagrams)
-dev-docs/
-
-# Demo and testing documentation
-DEMO_GUIDE.md
+# Benchmark results (local only)
+benchmarks/results/

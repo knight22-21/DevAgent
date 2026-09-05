@@ -1,0 +1,65 @@
+{
+  "description": "CI canary — runs without a real LLM. Tests framework infrastructure and scoring pipeline.",
+  "fail_threshold": 0.80,
+  "legacy_scripts": [
+    "benchmarks/bench_security.py",
+    "benchmarks/bench_tasks.py",
+    "benchmarks/bench_token_usage.py"
+  ],
+  "framework_checks": [
+    {
+      "id": "canary-tool-registry",
+      "description": "Core tools register without error",
+      "check_type": "python",
+      "check": "from devagent.tools.registry import build_registry; r = build_registry(); names = r.names(); assert 'read_file' in names and 'write_file' in names and 'run_shell' in names and 'grep' in names and 'git_status' in names, f'Missing tools: {names}'"
+    },
+    {
+      "id": "canary-web-tools",
+      "description": "Web tools register when searchx_base_url is set",
+      "check_type": "python",
+      "check": "from devagent.tools.registry import build_registry; r = build_registry(searchx_base_url='http://localhost:8888'); assert 'fetch_url' in r.names(), 'fetch_url missing'"
+    },
+    {
+      "id": "canary-config-load",
+      "description": "Default config loads with correct provider",
+      "check_type": "python",
+      "check": "from devagent.core.config import DevAgentConfig; c = DevAgentConfig(); assert c.llm.provider == 'ollama'; assert c.search_provider in ('brave', 'searchx')"
+    },
+    {
+      "id": "canary-vision-tools",
+      "description": "Vision tools register for vision providers",
+      "check_type": "python",
+      "check": "from devagent.tools.registry import build_registry; r = build_registry(provider='anthropic'); assert 'read_image' in r.names(), 'read_image missing for anthropic'"
+    },
+    {
+      "id": "canary-todo-tools",
+      "description": "Todo tools register when session_id provided",
+      "check_type": "python",
+      "check": "from devagent.tools.registry import build_registry; r = build_registry(session_id='test-session-123'); assert 'todo_write' in r.names() and 'todo_read' in r.names()"
+    },
+    {
+      "id": "canary-oracle-pass",
+      "description": "Oracle evaluator correctly identifies pass",
+      "check_type": "python",
+      "check": "from devagent.bench.oracle import OracleEvaluator; import tempfile; oe = OracleEvaluator(); d = tempfile.mkdtemp(); result = oe.evaluate('exit 0', cwd=d); assert result is True, f'expected True, got {result}'"
+    },
+    {
+      "id": "canary-oracle-fail",
+      "description": "Oracle evaluator correctly identifies failure",
+      "check_type": "python",
+      "check": "from devagent.bench.oracle import OracleEvaluator; import tempfile; oe = OracleEvaluator(); d = tempfile.mkdtemp(); result = oe.evaluate('exit 1', cwd=d); assert result is False, f'expected False, got {result}'"
+    },
+    {
+      "id": "canary-task-load",
+      "description": "task_set.json loads and parses correctly",
+      "check_type": "python",
+      "check": "from devagent.bench.runner import BenchRunner; tasks = BenchRunner.load_tasks(); assert len(tasks) >= 10, f'Expected >=10 tasks, got {len(tasks)}'"
+    },
+    {
+      "id": "canary-report-table",
+      "description": "Report renders without error on empty result set",
+      "check_type": "python",
+      "check": "from devagent.bench.report import BenchReport; BenchReport.render_summary([])"
+    }
+  ]
+}
