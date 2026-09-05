@@ -767,7 +767,7 @@ def analyze(
         "[yellow]devagent analyze[/yellow] is being rebuilt as part of the "
         "agent harness (Phase 1). Use [bold]devagent[/bold] (the interactive "
         "session) once Phase 1 is complete.\n\n"
-        "[dim]Track progress: DEVAGENT_ROADMAP.md[/dim]"
+        "[dim]Track progress: plans/DEVAGENT_ROADMAP.md[/dim]"
     )
     raise typer.Exit(0)
 
@@ -2289,6 +2289,201 @@ def init_project(
     console.print("\n[bold]Next steps:[/bold]")
     console.print("  1. Edit [bold]DEVAGENT.md[/bold] to describe your project, tech stack, and conventions.")
     console.print("  2. Run [bold]devagent run[/bold] — the agent will read DEVAGENT.md on startup.")
+
+
+# ---------------------------------------------------------------------------
+# devagent bench — B3, B4, B5 benchmark commands
+# ---------------------------------------------------------------------------
+
+bench_app = typer.Typer(
+    name="bench",
+    help="Benchmark DevAgent performance — native task set, cost sweep, CI canary.",
+    no_args_is_help=True,
+)
+app.add_typer(bench_app, name="bench")
+
+
+@bench_app.command("native")
+def bench_native(
+    category: str | None = typer.Option(None, "--category", "-c", help="Filter by category"),
+    difficulty: str | None = typer.Option(None, "--difficulty", "-d", help="easy | medium | hard"),
+    live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
+    output_json: bool = typer.Option(False, "--output-json", help="Save results as JSON to benchmarks/results/"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Override LLM model for live runs"),
+    limit: int | None = typer.Option(None, "--limit", "-n", help="Max number of tasks to run"),
+) -> None:
+    """Run the native task set benchmark (B3).
+
+    By default runs in --dry mode (no LLM, oracle only).
+    Pass --live to invoke the real agent against each task.
+    """
+    from devagent.bench.report import BenchReport
+    from devagent.bench.runner import BenchRunner
+
+    tasks = BenchRunner.load_tasks(category=category, difficulty=difficulty)
+    if limit:
+        tasks = tasks[:limit]
+
+    if not tasks:
+        console.print("[yellow]No tasks matched the filters.[/yellow]")
+        raise typer.Exit(0)
+
+    mode = "[yellow]live[/yellow]" if live else "[dim]dry[/dim]"
+    console.print(
+        f"\n[bold]devagent bench native[/bold] — {len(tasks)} tasks, mode={mode}"
+    )
+
+    runner = BenchRunner(tasks=tasks, dry_run=not live, model=model)
+    results = runner.run_all()
+
+    BenchReport.render_table(results)
+    BenchReport.render_summary(results)
+
+    if output_json:
+        path = BenchReport.save_json(results, label="native")
+        console.print(f"\n[dim]Results saved → {path}[/dim]")
+
+    passed = sum(1 for r in results if r.passed)
+    if passed < len(results):
+        raise typer.Exit(1)
+
+
+@bench_app.command("canary")
+def bench_canary(
+    threshold: float = typer.Option(0.80, "--threshold", help="Minimum pass rate (0.0–1.0)"),
+    skip_legacy: bool = typer.Option(False, "--skip-legacy", help="Skip existing bench_*.py scripts"),
+) -> None:
+    """Run the CI canary benchmark (B5) — no LLM required.
+
+    Runs framework checks from canary.json plus the existing bench_*.py scripts.
+    Exits with code 1 if pass_rate < threshold.
+    """
+    import json
+    from pathlib import Path
+
+    canary_path = Path(__file__).parent.parent / "benchmarks" / "tasks" / "canary.json"
+    canary = json.loads(canary_path.read_text(encoding="utf-8"))
+
+    passed_checks = 0
+    total_checks = 0
+    failures: list[str] = []
+
+    # 1. Framework checks (pure Python assertions)
+    console.print("\n[bold]Framework checks[/bold]")
+    for check in canary["framework_checks"]:
+        total_checks += 1
+        try:
+            exec(check["check"])  # noqa: S102
+            console.print(f"  [green]✓[/green] {check['id']}: {check['description']}")
+            passed_checks += 1
+        except Exception as exc:
+            console.print(f"  [red]✗[/red] {check['id']}: {exc}")
+            failures.append(check["id"])
+
+    # 2. Legacy benchmark scripts (mock-LLM, no real agent needed)
+    if not skip_legacy:
+        console.print("\n[bold]Legacy benchmark scripts[/bold]")
+        bench_dir = Path(__file__).parent.parent / "benchmarks"
+        for script_rel in canary.get("legacy_scripts", []):
+            script_path = Path(__file__).parent.parent / script_rel
+            if not script_path.exists():
+                console.print(f"  [dim]skip[/dim] {script_rel} (not found)")
+                continue
+            total_checks += 1
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                capture_output=True,
+                text=True,
+                cwd=str(bench_dir),
+            )
+            if result.returncode == 0:
+                console.print(f"  [green]✓[/green] {script_rel}")
+                passed_checks += 1
+            else:
+                short = (result.stdout + result.stderr).strip()[:200]
+                console.print(f"  [red]✗[/red] {script_rel}\n    {short}")
+                failures.append(script_rel)
+
+    # Summary
+    rate = passed_checks / total_checks if total_checks else 0.0
+    color = "green" if rate >= threshold else "red"
+    console.print(
+        f"\n[bold]Canary result:[/bold] "
+        f"[{color}]{passed_checks}/{total_checks} passed ({rate * 100:.0f}%)[/{color}]"
+        f" | threshold={threshold * 100:.0f}%"
+    )
+
+    if rate < threshold:
+        console.print(f"[red]Canary FAILED — {len(failures)} check(s) failed: {failures}[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]Canary PASSED ✓[/green]")
+
+
+@bench_app.command("sweep")
+def bench_sweep(
+    params: str = typer.Option("model,max_iterations", "--params", help="Comma-separated param names to sweep"),
+    limit: int = typer.Option(5, "--tasks", "-n", help="Number of tasks per combination"),
+    category: str | None = typer.Option(None, "--category", "-c"),
+    difficulty: str | None = typer.Option(None, "--difficulty", "-d"),
+    output_json: bool = typer.Option(False, "--output-json"),
+) -> None:
+    """Sweep parameter combinations for cost-vs-correctness analysis (B4).
+
+    Runs the native task set with different model/iteration/effort combinations
+    and renders a comparison table.
+
+    Note: requires --live LLM access; uses dry-run by default to test the framework.
+    """
+    import json
+
+    from devagent.bench.sweep import SweepRunner
+
+    param_keys = [p.strip() for p in params.split(",")]
+
+    # Default grid values for known params
+    _defaults: dict[str, list] = {
+        "model": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+        "max_iterations": [10, 30],
+        "effort": ["low", "high", "max"],
+    }
+    param_grid = {k: _defaults.get(k, []) for k in param_keys if k in _defaults}
+
+    if not param_grid:
+        console.print(f"[red]Unknown params: {param_keys}. Choose from: {list(_defaults)}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]devagent bench sweep[/bold] — grid: {param_grid}, tasks per combo: {limit}")
+
+    runner = SweepRunner(
+        param_grid=param_grid,
+        task_limit=limit,
+        category=category,
+        difficulty=difficulty,
+        dry_run=True,
+    )
+    sweep_results = runner.run()
+    SweepRunner.render_table(sweep_results, param_keys)
+
+    if output_json:
+        import datetime
+
+        from devagent.bench.report import _RESULTS_DIR
+
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+        path = _RESULTS_DIR / f"sweep_{ts}.json"
+        data = [
+            {
+                "params": sr.params,
+                "pass_rate": round(sr.pass_rate, 4),
+                "avg_cost_usd": round(sr.avg_cost_usd, 6),
+                "avg_duration_sec": round(sr.avg_duration_sec, 2),
+            }
+            for sr in sweep_results
+        ]
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        console.print(f"\n[dim]Sweep results saved → {path}[/dim]")
 
 
 if __name__ == "__main__":
