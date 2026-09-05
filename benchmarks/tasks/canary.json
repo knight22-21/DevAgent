@@ -41,13 +41,13 @@
       "id": "canary-oracle-pass",
       "description": "Oracle evaluator correctly identifies pass",
       "check_type": "python",
-      "check": "from devagent.bench.oracle import OracleEvaluator; import tempfile; oe = OracleEvaluator(); d = tempfile.mkdtemp(); result = oe.evaluate('python -c exit(0)', cwd=d); assert result is True, f'expected True, got {result}'"
+      "check": "from devagent.bench.oracle import OracleEvaluator; import tempfile; oe = OracleEvaluator(); d = tempfile.mkdtemp(); result = oe.evaluate('exit 0', cwd=d); assert result is True, f'expected True, got {result}'"
     },
     {
       "id": "canary-oracle-fail",
       "description": "Oracle evaluator correctly identifies failure",
       "check_type": "python",
-      "check": "from devagent.bench.oracle import OracleEvaluator; import tempfile; oe = OracleEvaluator(); d = tempfile.mkdtemp(); result = oe.evaluate('python -c exit(1)', cwd=d); assert result is False, f'expected False, got {result}'"
+      "check": "from devagent.bench.oracle import OracleEvaluator; import tempfile; oe = OracleEvaluator(); d = tempfile.mkdtemp(); result = oe.evaluate('exit 1', cwd=d); assert result is False, f'expected False, got {result}'"
     },
     {
       "id": "canary-task-load",
