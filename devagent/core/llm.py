@@ -392,35 +392,77 @@ class LLMClient:
     def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
         import ollama
 
+        oai_messages = _to_openai_messages(messages)
+        oai_tools = _to_openai_tools(tools) if tools else []
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
-            "messages": _to_openai_messages(messages),
+            "messages": oai_messages,
             "options": {"temperature": self._effort_temperature()},
         }
         if tools:
-            kwargs["tools"] = _to_openai_tools(tools)
+            kwargs["tools"] = oai_tools
 
-        resp = ollama.chat(**kwargs)
-        msg = resp.message
-
-        tool_calls: list[ToolCallRequest] = []
-        if msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_calls.append(ToolCallRequest(
+        try:
+            resp = ollama.chat(**kwargs)
+            msg = resp.message
+            raw_tcs = msg.tool_calls or []
+            tool_calls = [
+                ToolCallRequest(
                     id=str(uuid.uuid4())[:8],
                     name=tc.function.name,
                     args=tc.function.arguments if isinstance(tc.function.arguments, dict)
                          else json.loads(tc.function.arguments),
+                )
+                for tc in raw_tcs
+            ]
+            return LLMResponse(
+                content=msg.content or "",
+                tool_calls=tool_calls,
+                input_tokens=resp.prompt_eval_count or 0,
+                output_tokens=resp.eval_count or 0,
+                model=self.cfg.model,
+                provider="ollama",
+            )
+        except Exception as exc:
+            # Some Ollama versions return tool_call arguments as a JSON string,
+            # causing a Pydantic validation error inside the ollama library.
+            # Fall back to the raw HTTP response and normalise manually.
+            if "arguments" not in str(exc) and "validation" not in str(exc).lower():
+                raise
+            client = ollama.Client()
+            raw = client._request_raw(
+                "POST", "/api/chat",
+                json={
+                    "model": self.cfg.model,
+                    "messages": oai_messages,
+                    "tools": oai_tools,
+                    "stream": False,
+                    "options": {"temperature": self._effort_temperature()},
+                },
+            ).json()
+            msg_raw = raw.get("message", {})
+            tool_calls = []
+            for tc in (msg_raw.get("tool_calls") or []):
+                func = tc.get("function", {})
+                args = func.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (json.JSONDecodeError, ValueError):
+                        args = {}
+                tool_calls.append(ToolCallRequest(
+                    id=str(uuid.uuid4())[:8],
+                    name=func.get("name", ""),
+                    args=args,
                 ))
-
-        return LLMResponse(
-            content=msg.content or "",
-            tool_calls=tool_calls,
-            input_tokens=resp.prompt_eval_count or 0,
-            output_tokens=resp.eval_count or 0,
-            model=self.cfg.model,
-            provider="ollama",
-        )
+            return LLMResponse(
+                content=msg_raw.get("content") or "",
+                tool_calls=tool_calls,
+                input_tokens=raw.get("prompt_eval_count") or 0,
+                output_tokens=raw.get("eval_count") or 0,
+                model=self.cfg.model,
+                provider="ollama",
+            )
 
     async def _ollama_stream(
         self,
