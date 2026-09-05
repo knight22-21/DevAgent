@@ -76,11 +76,13 @@ class BenchRunner:
         tasks: list[Task] | None = None,
         dry_run: bool = True,
         model: str | None = None,
+        provider: str | None = None,
         max_iterations: int | None = None,
     ) -> None:
         self.tasks = tasks or self.load_tasks()
         self.dry_run = dry_run
         self.model = model
+        self.provider = provider
         self.max_iterations = max_iterations
         self._oracle = OracleEvaluator()
 
@@ -176,6 +178,8 @@ class BenchRunner:
         from devagent.core.config import load_config
 
         cfg = load_config()
+        if self.provider:
+            cfg.llm.provider = self.provider
         if self.model:
             cfg.llm.model = self.model
         # Task limit takes effect via cfg; runner-level override takes precedence.

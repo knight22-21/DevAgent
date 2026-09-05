@@ -53,12 +53,14 @@ class SweepRunner:
         category: str | None = None,
         difficulty: str | None = None,
         dry_run: bool = False,
+        provider: str | None = None,
     ) -> None:
         self.param_grid = param_grid or _DEFAULT_GRID
         self.task_limit = task_limit
         self.category = category
         self.difficulty = difficulty
         self.dry_run = dry_run
+        self.provider = provider
 
     def run(self) -> list[SweepResult]:
         """Execute all parameter combinations and return sweep results."""
@@ -82,6 +84,7 @@ class SweepRunner:
             runner = BenchRunner(
                 tasks=tasks,
                 dry_run=self.dry_run,
+                provider=self.provider,
                 model=params.get("model"),
                 max_iterations=params.get("max_iterations"),
             )

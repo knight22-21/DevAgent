@@ -2309,6 +2309,7 @@ def bench_native(
     difficulty: str | None = typer.Option(None, "--difficulty", "-d", help="easy | medium | hard"),
     live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
     output_json: bool = typer.Option(False, "--output-json", help="Save results as JSON to benchmarks/results/"),
+    provider: str | None = typer.Option(None, "--provider", "-p", help="Override LLM provider (ollama, anthropic, openai)"),
     model: str | None = typer.Option(None, "--model", "-m", help="Override LLM model for live runs"),
     limit: int | None = typer.Option(None, "--limit", "-n", help="Max number of tasks to run"),
 ) -> None:
@@ -2333,7 +2334,7 @@ def bench_native(
         f"\n[bold]devagent bench native[/bold] — {len(tasks)} tasks, mode={mode}"
     )
 
-    runner = BenchRunner(tasks=tasks, dry_run=not live, model=model)
+    runner = BenchRunner(tasks=tasks, dry_run=not live, provider=provider, model=model)
     results = runner.run_all()
 
     BenchReport.render_table(results)
@@ -2427,6 +2428,7 @@ def bench_sweep(
     category: str | None = typer.Option(None, "--category", "-c"),
     difficulty: str | None = typer.Option(None, "--difficulty", "-d"),
     live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
+    provider: str | None = typer.Option(None, "--provider", "-p", help="Override LLM provider (ollama, anthropic, openai)"),
     output_json: bool = typer.Option(False, "--output-json"),
 ) -> None:
     """Sweep parameter combinations for cost-vs-correctness analysis (B4).
@@ -2461,6 +2463,7 @@ def bench_sweep(
         category=category,
         difficulty=difficulty,
         dry_run=not live,
+        provider=provider,
     )
     sweep_results = runner.run()
     SweepRunner.render_table(sweep_results, param_keys)
