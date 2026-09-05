@@ -9,7 +9,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rich.console import Console
+
 from devagent.bench.oracle import OracleEvaluator
+
+_console = Console()
 
 _TASKS_DIR = Path(__file__).parent.parent.parent / "benchmarks" / "tasks"
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "benchmarks" / "fixtures"
@@ -121,9 +125,18 @@ class BenchRunner:
                 error=f"fixture_project not found: {fixture_src}",
             )
 
+        if not self.dry_run:
+            _console.print(
+                f"  [cyan]▶[/cyan] [dim]{task.id}[/dim]  {task.description[:72].rstrip()}…"
+            )
+
         with tempfile.TemporaryDirectory(prefix="devagent_bench_") as tmp:
             work_dir = Path(tmp) / task.fixture_project
-            shutil.copytree(fixture_src, work_dir)
+            shutil.copytree(
+                fixture_src,
+                work_dir,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
 
             start = time.monotonic()
             try:
@@ -165,24 +178,28 @@ class BenchRunner:
         cfg = load_config()
         if self.model:
             cfg.llm.model = self.model
-        if self.max_iterations:
-            cfg.agent.max_iterations = self.max_iterations
+        # Task limit takes effect via cfg; runner-level override takes precedence.
+        cfg.agent.max_iterations = self.max_iterations or task.max_iterations
 
-        session = DevAgentSession(project_root=str(work_dir), cfg=cfg)
-        iterations = 0
         try:
-            for _event in session.run(task.description):
-                iterations += 1
-                if iterations >= task.max_iterations:
-                    break
+            session = DevAgentSession(
+                project_root=str(work_dir),
+                cfg=cfg,
+                bare=True,  # no DEVAGENT.md / CodePrism — clean bench env
+            )
+            session.run_message(task.description, quiet=True)
         except Exception as exc:
             return TaskResult(
                 task_id=task.id,
                 passed=False,
                 duration_sec=0.0,
-                iterations_used=iterations,
                 error=str(exc),
             )
+
+        cost = session._budget.total_cost_usd
+        iterations = sum(
+            row.get("calls", 0) for row in session._budget.per_model_summary()
+        )
 
         passed, output = self._oracle.evaluate_verbose(
             task.oracle_check,
@@ -195,5 +212,6 @@ class BenchRunner:
             passed=passed,
             duration_sec=0.0,
             iterations_used=iterations,
+            cost_usd=cost,
             oracle_output=output[:500],
         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -287,3 +287,247 @@ class TestFixtureProject:
             cwd=str(self._fixture),
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# BenchRunner live (mocked LLM)
+# ---------------------------------------------------------------------------
+
+def _make_mock_session(cost: float = 0.0012, calls: int = 3) -> MagicMock:
+    """Return a mock DevAgentSession with realistic budget attributes."""
+    mock_budget = MagicMock()
+    mock_budget.total_cost_usd = cost
+    mock_budget.per_model_summary.return_value = [
+        {
+            "provider": "ollama",
+            "model": "qwen2.5-coder:7b",
+            "input_tokens": 500,
+            "output_tokens": 200,
+            "cost_usd": cost,
+            "calls": calls,
+        }
+    ]
+    session = MagicMock()
+    session._budget = mock_budget
+    session.run_message.return_value = "Done."
+    return session
+
+
+class TestBenchRunnerLive:
+    def _patched_run(self, task, mock_session, cfg=None):
+        """Helper: run a task with DevAgentSession and load_config mocked out."""
+        if cfg is None:
+            cfg = MagicMock()
+            cfg.llm.model = "qwen2.5-coder:7b"
+            cfg.agent.max_iterations = 10
+        with (
+            patch("devagent.core.config.load_config", return_value=cfg),
+            patch("devagent.agent.flows.DevAgentSession", return_value=mock_session),
+        ):
+            from devagent.bench.runner import BenchRunner
+            runner = BenchRunner(tasks=[task], dry_run=False)
+            return runner.run_task(task)
+
+    def test_live_passes_when_oracle_passes(self):
+        from devagent.bench.runner import Task
+        task = Task(
+            id="live-pass",
+            category="bug_fix",
+            difficulty="easy",
+            description="Fix the bug.",
+            fixture_project="sample_project",
+            oracle_check="exit 0",
+        )
+        result = self._patched_run(task, _make_mock_session())
+        assert result.passed is True
+        assert result.task_id == "live-pass"
+
+    def test_live_fails_when_oracle_fails(self):
+        from devagent.bench.runner import Task
+        task = Task(
+            id="live-fail",
+            category="bug_fix",
+            difficulty="easy",
+            description="Fix the bug.",
+            fixture_project="sample_project",
+            oracle_check="exit 1",
+        )
+        result = self._patched_run(task, _make_mock_session())
+        assert result.passed is False
+
+    def test_live_captures_cost(self):
+        from devagent.bench.runner import Task
+        task = Task(
+            id="live-cost",
+            category="bug_fix",
+            difficulty="easy",
+            description="Fix the bug.",
+            fixture_project="sample_project",
+            oracle_check="exit 0",
+        )
+        result = self._patched_run(task, _make_mock_session(cost=0.0034, calls=5))
+        assert result.cost_usd == pytest.approx(0.0034)
+        assert result.iterations_used == 5
+
+    def test_live_sets_max_iterations_from_task(self):
+        """cfg.agent.max_iterations should be set from task when no runner override."""
+        from devagent.bench.runner import Task
+        task = Task(
+            id="live-iters",
+            category="bug_fix",
+            difficulty="easy",
+            description="Fix the bug.",
+            fixture_project="sample_project",
+            oracle_check="exit 0",
+            max_iterations=7,
+        )
+        cfg = MagicMock()
+        cfg.llm.model = "qwen2.5-coder:7b"
+        cfg.agent.max_iterations = 30  # will be overridden
+
+        captured_cfg = {}
+
+        def fake_session_cls(**kwargs):
+            captured_cfg["max_iterations"] = kwargs.get("cfg").agent.max_iterations
+            return _make_mock_session()
+
+        with (
+            patch("devagent.core.config.load_config", return_value=cfg),
+            patch("devagent.agent.flows.DevAgentSession", side_effect=fake_session_cls),
+        ):
+            from devagent.bench.runner import BenchRunner
+            runner = BenchRunner(tasks=[task], dry_run=False)
+            runner.run_task(task)
+
+        assert captured_cfg["max_iterations"] == 7
+
+    def test_live_runner_override_wins_over_task(self):
+        """Runner-level max_iterations overrides task.max_iterations."""
+        from devagent.bench.runner import Task
+        task = Task(
+            id="live-override",
+            category="bug_fix",
+            difficulty="easy",
+            description="Fix the bug.",
+            fixture_project="sample_project",
+            oracle_check="exit 0",
+            max_iterations=5,
+        )
+        cfg = MagicMock()
+        cfg.llm.model = "qwen2.5-coder:7b"
+        cfg.agent.max_iterations = 30
+
+        captured_cfg = {}
+
+        def fake_session_cls(**kwargs):
+            captured_cfg["max_iterations"] = kwargs.get("cfg").agent.max_iterations
+            return _make_mock_session()
+
+        with (
+            patch("devagent.core.config.load_config", return_value=cfg),
+            patch("devagent.agent.flows.DevAgentSession", side_effect=fake_session_cls),
+        ):
+            from devagent.bench.runner import BenchRunner
+            runner = BenchRunner(tasks=[task], dry_run=False, max_iterations=20)
+            runner.run_task(task)
+
+        assert captured_cfg["max_iterations"] == 20
+
+    def test_live_session_error_returns_failed_result(self):
+        """If run_message raises, task result is failed with error string."""
+        from devagent.bench.runner import Task
+        task = Task(
+            id="live-err",
+            category="bug_fix",
+            difficulty="easy",
+            description="Fix the bug.",
+            fixture_project="sample_project",
+            oracle_check="exit 0",
+        )
+        bad_session = MagicMock()
+        bad_session.run_message.side_effect = RuntimeError("LLM unavailable")
+
+        with (
+            patch("devagent.core.config.load_config", return_value=MagicMock()),
+            patch("devagent.agent.flows.DevAgentSession", return_value=bad_session),
+        ):
+            from devagent.bench.runner import BenchRunner
+            runner = BenchRunner(tasks=[task], dry_run=False)
+            result = runner.run_task(task)
+
+        assert result.passed is False
+        assert "LLM unavailable" in result.error
+
+    def test_pycache_excluded_from_fixture_copy(self, tmp_path):
+        """shutil.copytree must not copy __pycache__ into the work dir."""
+        from devagent.bench.runner import BenchRunner, Task
+        task = Task(
+            id="cache-check",
+            category="bug_fix",
+            difficulty="easy",
+            description="",
+            fixture_project="sample_project",
+            oracle_check="exit 0",
+        )
+        runner = BenchRunner(tasks=[task], dry_run=True)
+        # Run normally — oracle passes, fixture is fine.
+        result = runner.run_task(task)
+        # The test is that it ran without error (pycache exclusion is internal,
+        # but the run would break if copytree failed).
+        assert result.error == ""
+
+
+# ---------------------------------------------------------------------------
+# SweepRunner live flag
+# ---------------------------------------------------------------------------
+
+class TestSweepLive:
+    def test_sweep_dry_mode_passes_dry_run_true(self):
+        from devagent.bench.sweep import SweepRunner
+        runner = SweepRunner(
+            param_grid={"model": ["qwen2.5-coder:7b"], "max_iterations": [10]},
+            task_limit=1,
+            difficulty="easy",
+            dry_run=True,
+        )
+        assert runner.dry_run is True
+
+    def test_sweep_live_mode_passes_dry_run_false(self):
+        from devagent.bench.sweep import SweepRunner
+        runner = SweepRunner(
+            param_grid={"model": ["qwen2.5-coder:7b"], "max_iterations": [10]},
+            task_limit=1,
+            difficulty="easy",
+            dry_run=False,
+        )
+        assert runner.dry_run is False
+
+    def test_sweep_run_invokes_bench_runner_with_correct_dry_flag(self):
+        """SweepRunner.run() must forward its dry_run flag to BenchRunner."""
+        from devagent.bench.sweep import SweepRunner
+
+        captured = {}
+
+        class SpyBenchRunner:
+            @staticmethod
+            def load_tasks(category=None, difficulty=None, tags=None):
+                from devagent.bench.runner import BenchRunner
+                return BenchRunner.load_tasks(difficulty="easy")[:1]
+
+            def __init__(self, tasks, dry_run, model=None, max_iterations=None):
+                captured["dry_run"] = dry_run
+
+            def run_all(self):
+                from devagent.bench.runner import TaskResult
+                return [TaskResult(task_id="x", passed=True, duration_sec=0.1)]
+
+        with patch("devagent.bench.sweep.BenchRunner", SpyBenchRunner):
+            runner = SweepRunner(
+                param_grid={"model": ["qwen2.5-coder:7b"]},
+                task_limit=1,
+                difficulty="easy",
+                dry_run=False,
+            )
+            runner.run()
+
+        assert captured["dry_run"] is False

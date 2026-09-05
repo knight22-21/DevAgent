@@ -2426,14 +2426,13 @@ def bench_sweep(
     limit: int = typer.Option(5, "--tasks", "-n", help="Number of tasks per combination"),
     category: str | None = typer.Option(None, "--category", "-c"),
     difficulty: str | None = typer.Option(None, "--difficulty", "-d"),
+    live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
     output_json: bool = typer.Option(False, "--output-json"),
 ) -> None:
     """Sweep parameter combinations for cost-vs-correctness analysis (B4).
 
     Runs the native task set with different model/iteration/effort combinations
-    and renders a comparison table.
-
-    Note: requires --live LLM access; uses dry-run by default to test the framework.
+    and renders a comparison table.  Pass --live to invoke the real agent.
     """
     import json
 
@@ -2453,14 +2452,15 @@ def bench_sweep(
         console.print(f"[red]Unknown params: {param_keys}. Choose from: {list(_defaults)}[/red]")
         raise typer.Exit(1)
 
-    console.print(f"\n[bold]devagent bench sweep[/bold] — grid: {param_grid}, tasks per combo: {limit}")
+    mode = "[yellow]live[/yellow]" if live else "[dim]dry[/dim]"
+    console.print(f"\n[bold]devagent bench sweep[/bold] — grid: {param_grid}, tasks per combo: {limit}, mode={mode}")
 
     runner = SweepRunner(
         param_grid=param_grid,
         task_limit=limit,
         category=category,
         difficulty=difficulty,
-        dry_run=True,
+        dry_run=not live,
     )
     sweep_results = runner.run()
     SweepRunner.render_table(sweep_results, param_keys)
