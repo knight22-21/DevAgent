@@ -177,6 +177,8 @@ class BenchRunner:
         from devagent.agent.flows import DevAgentSession
         from devagent.core.config import load_config
 
+        from devagent.core.config import RouterConfig, load_config
+
         cfg = load_config()
         if self.provider:
             cfg.llm.provider = self.provider
@@ -184,6 +186,18 @@ class BenchRunner:
             cfg.llm.model = self.model
         # Task limit takes effect via cfg; runner-level override takes precedence.
         cfg.agent.max_iterations = self.max_iterations or task.max_iterations
+
+        # When the bench specifies a model/provider, pin ALL routing tiers to it
+        # so the multi-model router doesn't pull in an uninstalled model.
+        if self.provider or self.model:
+            route = {"provider": cfg.llm.provider, "model": cfg.llm.model}
+            cfg.router = RouterConfig(
+                planning=route,
+                coding=route,
+                reviewing=route,
+                cheap=route,
+                fallback=route,
+            )
 
         try:
             session = DevAgentSession(
