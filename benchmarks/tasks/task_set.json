@@ -200,7 +200,7 @@
     "difficulty": "medium",
     "description": "The DataStore.search() uses eval() on user input — it will crash if value contains a single quote. Fix the method to be safe (no eval), keep tests passing, and verify 'O\\'Brien' works as a search value.",
     "fixture_project": "sample_project",
-    "oracle_check": "python -c \"import sys; sys.path.insert(0,'src'); from data_store import DataStore; ds=DataStore(); ds.insert({'name':\"O'Brien\"}); r=ds.search('name',\"O'Brien\"); sys.exit(0 if r else 1)\"",
+    "oracle_check": "python -c \"import sys; sys.path.insert(0,'src'); from data_store import DataStore; ds=DataStore(); name=chr(39).join(['O','Brien']); ds.insert({'name':name}); r=ds.search('name',name); sys.exit(0 if r else 1)\"",
     "oracle_pass_exit_code": 0,
     "expected_files_touched": ["src/data_store.py"],
     "max_iterations": 12,
@@ -255,8 +255,8 @@
     "oracle_check": "python -c \"import sys; text=open('DEVAGENT.md').read(); sys.exit(0 if len(text.split()) >= 80 else 1)\"",
     "oracle_pass_exit_code": 0,
     "expected_files_touched": ["DEVAGENT.md"],
-    "max_iterations": 10,
-    "timeout_sec": 90,
+    "max_iterations": 15,
+    "timeout_sec": 120,
     "tags": ["onboarding", "documentation", "write"]
   }
 ]

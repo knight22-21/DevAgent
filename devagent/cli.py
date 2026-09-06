@@ -2307,6 +2307,7 @@ app.add_typer(bench_app, name="bench")
 def bench_native(
     category: str | None = typer.Option(None, "--category", "-c", help="Filter by category"),
     difficulty: str | None = typer.Option(None, "--difficulty", "-d", help="easy | medium | hard"),
+    task_id: str | None = typer.Option(None, "--task-id", "-t", help="Run a single task by exact ID"),
     live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
     output_json: bool = typer.Option(False, "--output-json", help="Save results as JSON to benchmarks/results/"),
     provider: str | None = typer.Option(None, "--provider", "-p", help="Override LLM provider (ollama, anthropic, openai)"),
@@ -2322,6 +2323,8 @@ def bench_native(
     from devagent.bench.runner import BenchRunner
 
     tasks = BenchRunner.load_tasks(category=category, difficulty=difficulty)
+    if task_id:
+        tasks = [t for t in tasks if t.id == task_id]
     if limit:
         tasks = tasks[:limit]
 
