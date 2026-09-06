@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -239,16 +240,40 @@ class BenchRunner:
             restricted = session._loop.registry.get_restricted_definitions(_BENCH_TOOLS)
             session._loop.registry.get_definitions = lambda _r=restricted: _r  # type: ignore[method-assign]
 
+            # Wrap write_file to auto-syntax-check .py files and surface errors
+            # to the model so it can self-correct before proceeding.
+            _orig_write = session._loop.registry._handlers["write_file"]
+
+            def _write_with_syntax_check(args: dict) -> str:
+                result = _orig_write(args)
+                path = args.get("path", "")
+                if path.endswith(".py"):
+                    full = work_dir / path
+                    if full.exists():
+                        chk = subprocess.run(
+                            ["python", "-m", "py_compile", str(full)],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if chk.returncode != 0:
+                            result += f"\n[syntax error] {chk.stderr.strip()}"
+                return result
+
+            session._loop.registry._handlers["write_file"] = _write_with_syntax_check
+
             # Wall-clock timeout via a daemon thread. ThreadPoolExecutor.shutdown()
             # blocks until the worker finishes even after a timeout — daemon threads
             # do not: join(timeout=N) returns immediately once N seconds pass,
             # and the thread is abandoned without blocking the next task.
             wall_timeout = task.timeout_sec or 120
             thread_exc: list[Exception] = []
+            final_answer: list[str] = []
 
             def _run() -> None:
                 try:
-                    session.run_message(task.description, quiet=True)
+                    answer = session.run_message(task.description, quiet=True)
+                    if answer:
+                        final_answer.append(answer)
                 except Exception as exc:
                     thread_exc.append(exc)
 
@@ -265,6 +290,14 @@ class BenchRunner:
                 )
             if thread_exc:
                 raise thread_exc[0]
+
+            # Auto-write the agent's final text answer to DEVAGENT_OUTPUT.txt so
+            # explain/review oracle checks work even when the model answers in text
+            # rather than calling write_file explicitly.
+            if final_answer and not (work_dir / "DEVAGENT_OUTPUT.txt").exists():
+                (work_dir / "DEVAGENT_OUTPUT.txt").write_text(
+                    final_answer[0], encoding="utf-8"
+                )
         except Exception as exc:
             return TaskResult(
                 task_id=task.id,
