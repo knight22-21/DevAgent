@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -131,8 +131,17 @@ class BenchRunner:
     # Execution
     # ------------------------------------------------------------------
 
-    def run_all(self) -> list[TaskResult]:
-        return [self.run_task(t) for t in self.tasks]
+    def run_all(
+        self,
+        on_result: Callable[[TaskResult, list[TaskResult]], None] | None = None,
+    ) -> list[TaskResult]:
+        results: list[TaskResult] = []
+        for task in self.tasks:
+            r = self.run_task(task)
+            results.append(r)
+            if on_result:
+                on_result(r, results)
+        return results
 
     def run_task(self, task: Task) -> TaskResult:
         """Execute a single task and return its result."""
@@ -230,20 +239,32 @@ class BenchRunner:
             restricted = session._loop.registry.get_restricted_definitions(_BENCH_TOOLS)
             session._loop.registry.get_definitions = lambda _r=restricted: _r  # type: ignore[method-assign]
 
-            # Wall-clock timeout: if Ollama hangs mid-call the iteration cap
-            # never fires — wrap in a thread so we can cancel after task.timeout_sec.
+            # Wall-clock timeout via a daemon thread. ThreadPoolExecutor.shutdown()
+            # blocks until the worker finishes even after a timeout — daemon threads
+            # do not: join(timeout=N) returns immediately once N seconds pass,
+            # and the thread is abandoned without blocking the next task.
             wall_timeout = task.timeout_sec or 120
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(session.run_message, task.description, quiet=True)
+            thread_exc: list[Exception] = []
+
+            def _run() -> None:
                 try:
-                    fut.result(timeout=wall_timeout)
-                except FuturesTimeoutError:
-                    return TaskResult(
-                        task_id=task.id,
-                        passed=False,
-                        duration_sec=0.0,
-                        error=f"agent timed out after {wall_timeout}s",
-                    )
+                    session.run_message(task.description, quiet=True)
+                except Exception as exc:
+                    thread_exc.append(exc)
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join(timeout=wall_timeout)
+
+            if t.is_alive():
+                return TaskResult(
+                    task_id=task.id,
+                    passed=False,
+                    duration_sec=0.0,
+                    error=f"agent timed out after {wall_timeout}s",
+                )
+            if thread_exc:
+                raise thread_exc[0]
         except Exception as exc:
             return TaskResult(
                 task_id=task.id,
