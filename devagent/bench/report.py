@@ -98,6 +98,29 @@ class BenchReport:
         console.print(table)
 
     @staticmethod
+    def _result_to_dict(r: TaskResult) -> dict:
+        return {
+            "task_id": r.task_id,
+            "passed": r.passed,
+            "duration_sec": round(r.duration_sec, 2),
+            "iterations_used": r.iterations_used,
+            "cost_usd": round(r.cost_usd, 6),
+            "oracle_output": r.oracle_output,
+            "error": r.error,
+        }
+
+    @staticmethod
+    def partial_json_path(label: str = "bench") -> Path:
+        """Path for the rolling partial-results file written after each task."""
+        return _RESULTS_DIR / f"{label}_partial.json"
+
+    @staticmethod
+    def write_partial_json(results: list[TaskResult], path: Path) -> None:
+        """Overwrite the partial-results file with current completed tasks."""
+        data = [BenchReport._result_to_dict(r) for r in results]
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    @staticmethod
     def save_json(results: list[TaskResult], label: str = "bench") -> Path:
         """Save results to benchmarks/results/<label>_<timestamp>.json."""
         import datetime
@@ -105,17 +128,6 @@ class BenchReport:
         _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
         path = _RESULTS_DIR / f"{label}_{ts}.json"
-        data = [
-            {
-                "task_id": r.task_id,
-                "passed": r.passed,
-                "duration_sec": round(r.duration_sec, 2),
-                "iterations_used": r.iterations_used,
-                "cost_usd": round(r.cost_usd, 6),
-                "oracle_output": r.oracle_output,
-                "error": r.error,
-            }
-            for r in results
-        ]
+        data = [BenchReport._result_to_dict(r) for r in results]
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return path

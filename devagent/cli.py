@@ -2334,15 +2334,26 @@ def bench_native(
         f"\n[bold]devagent bench native[/bold] — {len(tasks)} tasks, mode={mode}"
     )
 
+    # Always write a rolling partial-results file so a crash doesn't lose completed tasks.
+    partial_path = BenchReport.partial_json_path(label="native")
+    partial_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _save_partial(result, all_so_far):
+        BenchReport.write_partial_json(all_so_far, partial_path)
+
     runner = BenchRunner(tasks=tasks, dry_run=not live, provider=provider, model=model)
-    results = runner.run_all()
+    results = runner.run_all(on_result=_save_partial)
 
     BenchReport.render_table(results)
     BenchReport.render_summary(results)
 
     if output_json:
         path = BenchReport.save_json(results, label="native")
-        console.print(f"\n[dim]Results saved → {path}[/dim]")
+        console.print(f"\n[dim]Results saved -> {path}[/dim]")
+
+    # Clean up partial file now that we have full results.
+    if partial_path.exists():
+        partial_path.unlink()
 
     passed = sum(1 for r in results if r.passed)
     if passed < len(results):
