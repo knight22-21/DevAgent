@@ -186,6 +186,45 @@ def _to_openai_messages(messages: list[AgentMessage]) -> list[dict]:
     return result
 
 
+def _to_ollama_messages(messages: list[AgentMessage]) -> list[dict]:
+    """Like _to_openai_messages but passes tool_call arguments as dicts.
+
+    The Ollama Python library validates history messages with Pydantic and
+    rejects arguments formatted as JSON strings (which is the OpenAI convention).
+    """
+    result = []
+    for msg in messages:
+        if msg.role == "tool_result":
+            content = msg.content
+            if _IMAGE_SENTINEL in content:
+                content = content.split(_IMAGE_SENTINEL, 1)[0]
+            result.append({
+                "role": "tool",
+                "tool_call_id": msg.tool_call_id,
+                "name": msg.tool_name,
+                "content": content,
+            })
+        elif msg.role == "assistant" and msg.tool_calls:
+            result.append({
+                "role": "assistant",
+                "content": msg.content or None,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.args,  # dict, not JSON string
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+        else:
+            result.append({"role": msg.role, "content": msg.content})
+    return result
+
+
 def _to_anthropic_messages(messages: list[AgentMessage]) -> list[dict]:
     """Convert to Anthropic format (strict user/assistant alternation,
     tool results bundled into user messages)."""
@@ -389,10 +428,82 @@ class LLMClient:
         effort = self.cfg.effort
         return _EFFORT_TEMPERATURE.get(effort, self.cfg.temperature)
 
+    @staticmethod
+    def _extract_text_tool_calls(content: str, valid_names: set[str]) -> list[ToolCallRequest]:
+        """Parse JSON tool calls embedded in the model's text output.
+
+        Some smaller models write tool calls as JSON in the content field instead of
+        using the structured tool_calls field. Handles two shapes:
+
+            Array:  [{"name": "read_file", "arguments": {"path": "x.py"}}, ...]
+            Object: {"name": "write_file", "parameters": {"path": "x.py", ...}}
+
+        Both may optionally appear inside a fenced code block.
+        The key for args is accepted as "arguments", "parameters", or "args".
+        """
+        text = content.strip()
+        if text.startswith("```"):
+            newline = text.find("\n")
+            text = text[newline + 1:] if newline != -1 else text[3:]
+            fence_end = text.rfind("```")
+            if fence_end != -1:
+                text = text[:fence_end]
+            text = text.strip()
+
+        if not text.startswith(("[", "{")):
+            return []
+
+        # Determine the outer bracket pair and find its closing position.
+        open_ch, close_ch = ("[", "]") if text.startswith("[") else ("{", "}")
+        depth = 0
+        end = 0
+        for i, ch in enumerate(text):
+            if ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if not end:
+            return []
+
+        try:
+            parsed = json.loads(text[:end])
+        except (json.JSONDecodeError, ValueError):
+            return []
+
+        # Normalise to a list of candidate items.
+        items: list = parsed if isinstance(parsed, list) else [parsed]
+
+        def _coerce_args(raw: object) -> dict:
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, str):
+                try:
+                    out = json.loads(raw)
+                    return out if isinstance(out, dict) else {}
+                except (json.JSONDecodeError, ValueError):
+                    return {}
+            return {}
+
+        result: list[ToolCallRequest] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("tool")
+            args = _coerce_args(
+                item.get("arguments") or item.get("parameters") or item.get("args") or {}
+            )
+            if not name or name not in valid_names:
+                continue
+            result.append(ToolCallRequest(id=str(uuid.uuid4())[:8], name=name, args=args))
+        return result
+
     def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
         import ollama
 
-        oai_messages = _to_openai_messages(messages)
+        oai_messages = _to_ollama_messages(messages)
         oai_tools = _to_openai_tools(tools) if tools else []
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
@@ -415,8 +526,16 @@ class LLMClient:
                 )
                 for tc in raw_tcs
             ]
+            content = msg.content or ""
+            # Fallback: some models emit tool calls as JSON in the content field.
+            if tools and not tool_calls and content:
+                valid = {t.name for t in tools}
+                text_tcs = self._extract_text_tool_calls(content, valid)
+                if text_tcs:
+                    tool_calls = text_tcs
+                    content = ""
             return LLMResponse(
-                content=msg.content or "",
+                content=content,
                 tool_calls=tool_calls,
                 input_tokens=resp.prompt_eval_count or 0,
                 output_tokens=resp.eval_count or 0,
