@@ -250,7 +250,7 @@
     "id": "onboarding-001",
     "category": "onboarding",
     "difficulty": "easy",
-    "description": "You are new to this codebase. Explore src/ and tests/, then write a DEVAGENT.md file at the project root with: purpose, module overview, how to run tests, known issues. At least 100 words.",
+    "description": "You are new to this codebase. Explore src/ and tests/, then write a file named DEVAGENT.md (path: DEVAGENT.md) with: purpose, module overview, how to run tests, known issues. At least 100 words.",
     "fixture_project": "sample_project",
     "oracle_check": "python -c \"import sys; text=open('DEVAGENT.md').read(); sys.exit(0 if len(text.split()) >= 80 else 1)\"",
     "oracle_pass_exit_code": 0,

@@ -117,6 +117,7 @@ class DevAgentSession:
         bare: bool = False,
         allow_tools: list[str] | None = None,
         output_format: str = "rich",
+        system_prompt_override: str | None = None,
     ) -> None:
         from devagent.agent import permissions as perm_registry
         from devagent.agent.loop import AgentLoop
@@ -242,12 +243,15 @@ class DevAgentSession:
         self._wrap_file_tools_for_undo(registry)
 
         # Bare mode: omit DEVAGENT.md from the system prompt
-        devagent_md = "" if bare else load_devagent_md(self._project_root)
-        system_prompt = build_system_prompt(
-            project_description=f"Project: {self._project_root.name}",
-            extra_context=extra_system,
-            devagent_md=devagent_md,
-        )
+        if system_prompt_override:
+            system_prompt = system_prompt_override
+        else:
+            devagent_md = "" if bare else load_devagent_md(self._project_root)
+            system_prompt = build_system_prompt(
+                project_description=f"Project: {self._project_root.name}",
+                extra_context=extra_system,
+                devagent_md=devagent_md,
+            )
 
         llm = LLMClient(cfg.llm)
         import sys

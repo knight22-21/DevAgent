@@ -112,7 +112,7 @@ def register_shell_tool(
     # run_shell
     # ------------------------------------------------------------------
     def run_shell(args: dict) -> str:
-        command = args.get("command", "").strip()
+        command = (args.get("command") or args.get("cmd") or "").strip()
         timeout = args.get("timeout", timeout_sec)
         background = bool(args.get("background", False))
 
