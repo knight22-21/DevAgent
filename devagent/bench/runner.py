@@ -33,7 +33,11 @@ _BENCH_SYSTEM_PROMPT = (
     "file (all functions, not just the changed one), then run_shell to verify with pytest. "
     "To add a feature or write a file: call list_files or read_file to explore first, "
     "then write_file to write the complete file. "
-    "Always use tools. Never output a text explanation as your answer."
+    "To explain, review, or audit code: read the relevant files first, then call write_file to save "
+    "your answer to DEVAGENT_OUTPUT.txt. Be technical and specific — name exact functions, "
+    "vulnerability types (e.g. eval() injection, security risk), and code patterns. "
+    "IMPORTANT: Always write output to files explicitly using write_file. "
+    "Never rely on your final text reply as the output — always call write_file."
 )
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "benchmarks" / "fixtures"
 

@@ -6,6 +6,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Load .env from the project root before anything else touches env vars.
+# This lets OLLAMA_HOST / OLLAMA_API_KEY wire Ollama Cloud without shell exports.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).parent.parent / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv not installed — env vars must be set manually
+
 import httpx
 import typer
 from rich.console import Console
@@ -2309,7 +2317,6 @@ def bench_native(
     difficulty: str | None = typer.Option(None, "--difficulty", "-d", help="easy | medium | hard"),
     task_id: str | None = typer.Option(None, "--task-id", "-t", help="Run a single task by exact ID"),
     live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
-    output_json: bool = typer.Option(False, "--output-json", help="Save results as JSON to benchmarks/results/"),
     provider: str | None = typer.Option(None, "--provider", "-p", help="Override LLM provider (ollama, anthropic, openai)"),
     model: str | None = typer.Option(None, "--model", "-m", help="Override LLM model for live runs"),
     limit: int | None = typer.Option(None, "--limit", "-n", help="Max number of tasks to run"),
@@ -2350,11 +2357,12 @@ def bench_native(
     BenchReport.render_table(results)
     BenchReport.render_summary(results)
 
-    if output_json:
-        path = BenchReport.save_json(results, label="native")
-        console.print(f"\n[dim]Results saved -> {path}[/dim]")
+    # Always persist — results are saved after every task (partial) and again
+    # as a timestamped final file so nothing is lost on crash or mid-run stop.
+    path = BenchReport.save_json(results, label="native")
+    console.print(f"\n[dim]Results saved -> {path}[/dim]")
 
-    # Clean up partial file now that we have full results.
+    # Partial file is now redundant — clean it up.
     if partial_path.exists():
         partial_path.unlink()
 

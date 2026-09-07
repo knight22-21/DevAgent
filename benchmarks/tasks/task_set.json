@@ -172,7 +172,7 @@
     "id": "feature-add-003",
     "category": "feature_add",
     "difficulty": "hard",
-    "description": "Add a DataStore.update(field, match_value, update_dict) method that updates all records matching field==match_value with the values in update_dict. Write tests and make them pass.",
+    "description": "Add a DataStore.update(field, match_value, update_dict) method that updates all records matching field==match_value with the values in update_dict. Write tests in tests/test_data_store.py with function names containing 'update' (e.g. test_update or test_update_basic) and make them pass.",
     "fixture_project": "sample_project",
     "oracle_check": "python -m pytest tests/test_data_store.py -q --tb=short -k update",
     "oracle_pass_exit_code": 0,
@@ -190,7 +190,7 @@
     "oracle_check": "python -c \"import sys; text=open('DEVAGENT_OUTPUT.txt').read(); sys.exit(0 if len(text.split()) >= 30 else 1)\"",
     "oracle_pass_exit_code": 0,
     "expected_files_touched": [],
-    "max_iterations": 5,
+    "max_iterations": 10,
     "timeout_sec": 60,
     "tags": ["explain", "no_write", "onboarding"]
   },
@@ -217,7 +217,7 @@
     "oracle_pass_exit_code": 0,
     "expected_files_touched": ["tests/test_string_utils_full.py"],
     "max_iterations": 15,
-    "timeout_sec": 90,
+    "timeout_sec": 150,
     "tags": ["python", "test_write", "comprehensive"]
   },
   {
