@@ -2466,7 +2466,7 @@ def bench_sweep(
 
     # Default grid values for known params
     _defaults: dict[str, list] = {
-        "model": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
+        "model": ["gpt-oss:20b", "glm-5.3-flash"],
         "max_iterations": [10, 30],
         "effort": ["low", "high", "max"],
     }
@@ -2508,7 +2508,7 @@ def bench_sweep(
             for sr in sweep_results
         ]
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        console.print(f"\n[dim]Sweep results saved → {path}[/dim]")
+        console.print(f"\n[dim]Sweep results saved -> {path}[/dim]")
 
 
 if __name__ == "__main__":
