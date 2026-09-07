@@ -96,6 +96,25 @@ Primary failure modes: **5 timeouts** (model hung waiting for Ollama on complex 
 
 ---
 
+## B4 — Cost-to-correctness sweep
+
+Answers: *"Which model gives the best value for real coding tasks?"*
+
+Run on 5 tasks from the native set (bug_fix, feature_add, security, refactor categories), both models on Ollama Cloud — September 2026.
+
+```bash
+devagent bench sweep --live --params model --tasks 5 --provider ollama
+```
+
+| Model | Pass Rate | Avg time/task | Notes |
+|---|---|---|---|
+| **gpt-oss:20b** | **5/5 (100%)** | **38.6s** | Solid tool-call compliance; reads files, writes code, verifies with tests |
+| glm-5.3-flash | 2/5 (40%) | 3.0s | Responds fast but skips the tool-call loop; fails oracle checks |
+
+**Takeaway:** glm-5.3-flash's 3s average reflects that it completes turns without doing the work — it answers immediately rather than reading files, writing code, and running tests. gpt-oss:20b takes longer because it actually executes each step. For agent tasks, time-per-task is not a measure of efficiency; pass rate is.
+
+---
+
 ## Running the benchmark
 
 **Dry run (oracle only, no LLM):**
@@ -137,3 +156,4 @@ Results are always saved to `benchmarks/results/<timestamp>.json`. A rolling `na
 |---|---|---|---|
 | `benchmarks/results/llama32_3b_baseline.json` | llama3.2:3b (local) | 9/20 (45%) | Sep 2026 |
 | `benchmarks/results/native_20260907_074033.json` | gpt-oss:20b (cloud) | 20/20 (100%) | Sep 2026 |
+| `benchmarks/results/sweep_20260907_171806.json` | B4 sweep: gpt-oss:20b vs glm-5.3-flash | 5/5 vs 2/5 | Sep 2026 |
