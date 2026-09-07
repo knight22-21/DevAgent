@@ -32,6 +32,8 @@ DevAgent is a terminal-based AI coding agent that operates on your local codebas
 - [Session management](#session-management)
 - [Security gate](#security-gate)
 - [Background watcher](#background-watcher)
+- [Effort levels](#effort-levels)
+- [Skills](#skills)
 - [REST API](#rest-api)
 - [Writing plugin tools](#writing-plugin-tools)
 - [Contributing](#contributing)
@@ -59,7 +61,9 @@ Three specific problems it addresses:
 
 DevAgent uses a ReAct (Reason + Act) loop. On each turn the LLM decides what to do next — read a file, run a shell command, edit a module, call the GitHub API — executes that action using a tool, and incorporates the result before deciding the next step. This continues until the task is complete or a final answer is reached.
 
-The loop is driven by a set of built-in tools: file reading and writing, shell execution, git operations, grep and search, GitHub API calls, and CodePrism graph queries. You can extend it with custom tools through the plugin registry (see [Writing plugin tools](#writing-plugin-tools)).
+The loop is driven by a set of built-in tools: file reading and writing, shell execution, git operations, grep and search, GitHub API calls, CodePrism graph queries, web search and fetch, image/vision analysis, Jupyter notebook reading and editing, and todo tracking. You can extend it with custom tools through the plugin registry (see [Writing plugin tools](#writing-plugin-tools)).
+
+For complex tasks, `devagent orchestrate` decomposes the work into sub-tasks and runs multiple worker agents in parallel. A planner agent breaks down the high-level goal, workers execute in parallel with shared project context, and a coordinator synthesises the results.
 
 Sessions are persisted in a local SQLite database. You can close the terminal, return later, and resume exactly where you left off. Token usage and estimated cost are tracked per session and displayed live.
 
@@ -134,8 +138,15 @@ devagent index
 Indexing builds the CodePrism knowledge graph from your source files. It takes a few seconds for small projects and a couple of minutes for large ones. Run it again after significant code changes; it performs an incremental update automatically.
 
 ```bash
-# Step 3: start an interactive session
-devagent
+# Step 3: (optional) create a DEVAGENT.md project config
+devagent init-project
+```
+
+This creates a `DEVAGENT.md` file at your project root. The agent reads it at session start and uses it for project-specific instructions: tech stack, test command, code conventions, important paths. Edit it to suit your project.
+
+```bash
+# Step 4: start an interactive session
+devagent run
 ```
 
 You now have an interactive session. Type any task in plain language:
@@ -148,6 +159,14 @@ You now have an interactive session. Type any task in plain language:
 ```
 
 The agent works through the task step by step, showing its reasoning and the results of each tool call. When it finishes, you can review the changes in your editor and continue or close the session.
+
+**Run a single task non-interactively:**
+
+```bash
+devagent do "add a clamp() function to src/math_utils.py and write a test for it"
+```
+
+Exits with code 0 on success, 1 on error. Use `--output-format stream-json` for machine-readable output in CI pipelines.
 
 **Resuming a session:**
 
@@ -190,23 +209,43 @@ devagent bench native --live --model gpt-oss:20b --provider ollama
 
 ## Commands reference
 
-### Core
+### Interactive and non-interactive sessions
 
 | Command | Description |
 |---|---|
-| `devagent` | Start an interactive session in the current directory |
-| `devagent init` | Run the setup wizard (LLM provider, GitHub token, search) |
+| `devagent run` | Start an interactive REPL session in the current directory |
+| `devagent run --effort <level>` | Set reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `devagent run --bare` | Skip DEVAGENT.md, memory, CodePrism, and permission gate |
+| `devagent run --plan` | Require plan approval before every task |
+| `devagent run --allow <pattern>` | Auto-approve tool calls matching pattern (repeatable) |
+| `devagent run --deny <pattern>` | Auto-deny tool calls matching pattern (repeatable) |
+| `devagent do "<task>"` | Run a single task non-interactively; exits 0/1 |
+| `devagent do "<task>" --output-format stream-json` | Machine-readable output for CI pipelines |
+| `devagent orchestrate "<task>"` | Decompose task and run parallel worker agents |
+| `devagent orchestrate "<task>" --workers N` | Control worker parallelism |
+| `devagent orchestrate "<task>" --plan` | Review the decomposition plan before starting workers |
+
+### Setup and configuration
+
+| Command | Description |
+|---|---|
+| `devagent init` | Run the setup wizard (LLM provider, GitHub token) |
+| `devagent init-project` | Create a `DEVAGENT.md` project config in the current directory |
 | `devagent doctor` | Check provider connectivity, index status, offline capability |
 | `devagent config --show` | Print current configuration |
 | `devagent config --set key=value` | Set a configuration value |
 
-### Codebase indexing
+### Codebase indexing and analysis
 
 | Command | Description |
 |---|---|
 | `devagent index` | Build or update the CodePrism knowledge graph |
-| `devagent index --full` | Force a complete re-index (ignores incremental cache) |
-| `devagent index --status` | Show index statistics without rebuilding |
+| `devagent index --full` | Force a complete re-index |
+| `devagent index --status` | Show index statistics |
+| `devagent onboard` | Architecture overview: file map, coupled files, symbols, test gaps |
+| `devagent analyze` | Run a codebase analysis report |
+| `devagent search "<query>"` | Search the knowledge graph |
+| `devagent reports` | List and view saved analysis reports |
 
 ### GitHub flows
 
@@ -217,21 +256,41 @@ devagent bench native --live --model gpt-oss:20b --provider ollama
 | `devagent triage <owner/repo>` | Triage open issues with labels and effort estimates |
 | `devagent fix-ci <run-url>` | Analyse a failed CI run and push a fix |
 
+### Skills
+
+| Command | Description |
+|---|---|
+| `devagent skills list` | List all available skills |
+| `devagent skills new <name>` | Create a new skill interactively |
+
+Skills are reusable task templates invoked with `/<skill-name>` inside a REPL session.
+
 ### Sessions
 
 | Command | Description |
 |---|---|
 | `devagent session list` | List all sessions with token usage and date |
 | `devagent session resume <id>` | Resume a previous session |
+| `devagent session compress` | Compress session history to reduce token usage |
 | `devagent session delete <id>` | Delete a session and its history |
 
-### Watcher
+### Background watcher
 
 | Command | Description |
 |---|---|
-| `devagent watcher start <owner/repo>` | Start background monitoring of a repository |
-| `devagent watcher status` | Show watcher state and recent analyses |
-| `devagent watcher stop` | Stop the background watcher |
+| `devagent watch --repo owner/repo --start` | Start background monitoring of a repository |
+| `devagent watch --status` | Show watcher state and recent analyses |
+| `devagent watch --stop` | Stop the background watcher |
+
+### Benchmark
+
+| Command | Description |
+|---|---|
+| `devagent bench native` | Dry-run: validate oracle/fixtures without calling the LLM |
+| `devagent bench native --live --model <m> --provider <p>` | Live run against a model |
+| `devagent bench native --category <c>` | Filter by category (`bug_fix`, `feature_add`, …) |
+| `devagent bench native --difficulty <d>` | Filter by difficulty (`easy`, `medium`, `hard`) |
+| `devagent bench native -t <task-id>` | Run a single task by ID |
 
 ### Server
 
@@ -400,19 +459,19 @@ Security events are logged per session. Run `devagent session list` and inspect 
 The watcher monitors a GitHub repository in the background and automatically analyses new issues as they are opened:
 
 ```bash
-devagent watcher start owner/repo
+devagent watch --repo owner/repo --start
 ```
 
 For each new issue the watcher estimates complexity, identifies which files are likely affected, and stores the analysis locally. You can review analyses in your next interactive session or from the CLI:
 
 ```bash
-devagent watcher status
+devagent watch --status
 ```
 
 The watcher runs as a background process and survives terminal restarts. Stop it explicitly when you no longer need it:
 
 ```bash
-devagent watcher stop
+devagent watch --stop
 ```
 
 ---
@@ -439,6 +498,47 @@ devagent serve --port 8080     # custom port
 | GET | `/api/graph/files` | File map from the knowledge graph |
 
 All responses are JSON. CORS is enabled for local development. No authentication is applied — bind to `127.0.0.1` (the default) to avoid exposing the API on your network.
+
+---
+
+## Effort levels
+
+The `--effort` flag controls how hard the agent tries on each task. Higher effort uses more tokens and takes longer but produces better results on complex tasks.
+
+| Level | When to use |
+|---|---|
+| `low` | Quick questions, file reads, trivial edits |
+| `medium` | Standard coding tasks (default) |
+| `high` | Bug fixes across multiple files, refactors |
+| `xhigh` | Complex architectural changes; enables extended thinking on Anthropic models |
+| `max` | Hardest tasks: security audits, large refactors, novel algorithms |
+
+```bash
+devagent run --effort high
+devagent do "audit src/ for SQL injection vulnerabilities" --effort max
+```
+
+---
+
+## Skills
+
+Skills are reusable task templates that you invoke with a `/` prefix inside a `devagent run` session. They let you package common workflows — code reviews, test generation, deployment checks — as named commands.
+
+```bash
+# See what skills are available
+devagent skills list
+
+# Create a new skill interactively
+devagent skills new pr-review
+```
+
+Once created, invoke a skill inside a session:
+
+```
+> /pr-review https://github.com/owner/repo/pull/42
+```
+
+Skills are stored in your DevAgent config directory and are available in all sessions and projects.
 
 ---
 
