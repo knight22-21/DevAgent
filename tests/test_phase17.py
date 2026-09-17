@@ -297,6 +297,7 @@ def _make_mock_session(cost: float = 0.0012, calls: int = 3) -> MagicMock:
     """Return a mock DevAgentSession with realistic budget attributes."""
     mock_budget = MagicMock()
     mock_budget.total_cost_usd = cost
+    mock_budget.call_count = calls
     mock_budget.per_model_summary.return_value = [
         {
             "provider": "ollama",
