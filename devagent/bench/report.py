@@ -26,18 +26,21 @@ class BenchReport:
         table.add_column("Iter", justify="right")
         table.add_column("Cost $", justify="right")
         table.add_column("Time (s)", justify="right")
-        table.add_column("Error / Output", style="dim", max_width=50)
+        table.add_column("Missing Files", style="yellow", max_width=28)
+        table.add_column("Error / Output", style="dim", max_width=36)
 
         for r in results:
             status = "[green]ok[/green]" if r.passed else "[red]FAIL[/red]"
             detail = r.error or r.oracle_output or ""
+            missed = ", ".join(r.files_missed) if r.files_missed else "-"
             table.add_row(
                 r.task_id,
                 status,
                 str(r.iterations_used) if r.iterations_used else "-",
                 f"{r.cost_usd:.4f}" if r.cost_usd else "-",
                 f"{r.duration_sec:.1f}",
-                detail[:80],
+                missed[:28],
+                detail[:60],
             )
 
         console.print(table)
@@ -60,12 +63,18 @@ class BenchReport:
         avg_iter = sum(r.iterations_used for r in results) / total
 
         color = "green" if rate >= 80 else "yellow" if rate >= 50 else "red"
+        tasks_with_misses = sum(1 for r in results if r.files_missed)
+        miss_note = (
+            f" | [yellow]{tasks_with_misses} task(s) missed expected files[/yellow]"
+            if tasks_with_misses else ""
+        )
         console.print(
             f"\n[bold]Summary:[/bold] "
             f"[{color}]{passed}/{total} passed ({rate:.0f}%)[/{color}] | "
             f"avg cost ${avg_cost:.4f} | "
             f"avg time {avg_time:.1f}s | "
             f"avg iterations {avg_iter:.1f}"
+            f"{miss_note}"
         )
 
     @staticmethod
@@ -107,6 +116,8 @@ class BenchReport:
             "cost_usd": round(r.cost_usd, 6),
             "oracle_output": r.oracle_output,
             "error": r.error,
+            "files_touched": r.files_touched,
+            "files_missed": r.files_missed,
         }
 
     @staticmethod
