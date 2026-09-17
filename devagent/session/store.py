@@ -236,6 +236,33 @@ def get_events(session_id: str, db_path: Path | None = None) -> list[dict]:
     return result
 
 
+def trim_events(session_id: str, turns_to_remove: int, db_path: Path | None = None) -> int:
+    """Delete the last N user-turn groups from the event log.
+
+    A 'turn' is one user message plus all following assistant/tool events.
+    Returns the number of events deleted.
+    """
+    events = get_events(session_id, db_path)
+    if not events:
+        return 0
+    user_seqs = [e["seq"] for e in events if e["role"] == "user"]
+    if not user_seqs:
+        return 0
+    n = min(turns_to_remove, len(user_seqs))
+    cutoff_seq = user_seqs[-n]
+    with _conn(db_path) as conn:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE session_id = ? AND seq >= ?",
+            (session_id, cutoff_seq),
+        )
+        count = cur.fetchone()[0]
+        conn.execute(
+            "DELETE FROM events WHERE session_id = ? AND seq >= ?",
+            (session_id, cutoff_seq),
+        )
+    return count
+
+
 def get_token_totals(session_id: str, db_path: Path | None = None) -> dict[str, int]:
     with _conn(db_path) as conn:
         row = conn.execute(

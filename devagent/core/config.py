@@ -144,34 +144,82 @@ class DevAgentConfig(BaseModel):
 
 
 def config_exists() -> bool:
-    """Check if the config file exists."""
+    """Check if the user-level config file exists."""
     return get_config_path().is_file()
 
 
-def load_config() -> DevAgentConfig:
-    """Read the TOML config file and return a DevAgentConfig model.
+def _deep_merge(base: dict, override: dict) -> None:
+    """Recursively merge override into base (override wins on conflicts)."""
+    for k, v in override.items():
+        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
 
-    Returns defaults if the file does not exist.
+
+def load_config(project_root: str | None = None) -> DevAgentConfig:
+    """Load config merging four levels (lowest to highest priority):
+
+      1. Built-in defaults (DevAgentConfig field defaults)
+      2. User config      (~/.config/devagent/settings.toml)
+      3. Project local    (<root>/.devagent/settings.local.toml)  [gitignored]
+      4. Project config   (<root>/.devagent/settings.toml)        [committed]
+
+    Returns defaults when no files exist.
     """
-    config_path = get_config_path()
-    if not config_path.is_file():
+    merged: dict = {}
+
+    # Level 2: user config
+    user_path = get_config_path()
+    if user_path.is_file():
+        with open(user_path, "rb") as f:
+            _deep_merge(merged, tomllib.load(f))
+
+    if project_root:
+        from pathlib import Path as _Path
+        root = _Path(project_root)
+
+        # Level 3: project local (gitignored secrets / overrides)
+        local_path = root / ".devagent" / "settings.local.toml"
+        if local_path.is_file():
+            with open(local_path, "rb") as f:
+                _deep_merge(merged, tomllib.load(f))
+
+        # Level 4 (highest): committed project settings
+        project_path = root / ".devagent" / "settings.toml"
+        if project_path.is_file():
+            with open(project_path, "rb") as f:
+                _deep_merge(merged, tomllib.load(f))
+
+    try:
+        return DevAgentConfig(**merged)
+    except Exception:
         return DevAgentConfig()
 
-    with open(config_path, "rb") as f:
-        data = tomllib.load(f)
 
-    return DevAgentConfig(**data)
+def save_config(
+    config: DevAgentConfig,
+    project_root: str | None = None,
+    scope: str = "user",
+) -> None:
+    """Write DevAgentConfig to the appropriate config file.
 
-
-def save_config(config: DevAgentConfig) -> None:
-    """Write the DevAgentConfig model to the TOML config file.
-
-    Creates parent directories if they don't exist.
+    scope:
+      "user"    — ~/.config/devagent/settings.toml  (default)
+      "project" — <project_root>/.devagent/settings.toml
+      "local"   — <project_root>/.devagent/settings.local.toml
     """
-    config_path = get_config_path()
+    from pathlib import Path as _Path
+
+    if scope == "project" and project_root:
+        config_path = _Path(project_root) / ".devagent" / "settings.toml"
+    elif scope == "local" and project_root:
+        config_path = _Path(project_root) / ".devagent" / "settings.local.toml"
+    else:
+        config_path = get_config_path()
+
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Convert Pydantic model to dict, excluding None values for cleaner TOML
     data = config.model_dump(exclude_none=True)
 
     # Remove empty fallback section to keep config clean
