@@ -82,6 +82,25 @@ class TaskResult:
     cost_usd: float = 0.0
     oracle_output: str = ""
     error: str = ""
+    files_touched: list[str] = field(default_factory=list)
+    files_missed: list[str] = field(default_factory=list)
+
+
+def _snapshot_mtimes(root: Path) -> dict[str, float]:
+    """Return {relative_posix_path: mtime} for every file under root."""
+    result: dict[str, float] = {}
+    for p in root.rglob("*"):
+        if p.is_file():
+            result[p.relative_to(root).as_posix()] = p.stat().st_mtime
+    return result
+
+
+def _changed_files(before: dict[str, float], after: dict[str, float]) -> list[str]:
+    """Return sorted list of paths that were added or modified between snapshots."""
+    return sorted(
+        path for path, mtime in after.items()
+        if path not in before or before[path] != mtime
+    )
 
 
 class BenchRunner:
@@ -265,10 +284,9 @@ class BenchRunner:
 
             session._loop.registry._handlers["write_file"] = _write_with_syntax_check
 
-            # Wall-clock timeout via a daemon thread. ThreadPoolExecutor.shutdown()
-            # blocks until the worker finishes even after a timeout — daemon threads
-            # do not: join(timeout=N) returns immediately once N seconds pass,
-            # and the thread is abandoned without blocking the next task.
+            # Snapshot file mtimes so we can tell which files the agent touched
+            snapshot_before = _snapshot_mtimes(work_dir)
+
             wall_timeout = task.timeout_sec or 120
             thread_exc: list[Exception] = []
             final_answer: list[str] = []
@@ -311,10 +329,14 @@ class BenchRunner:
             )
 
         cost = session._budget.total_cost_usd
-        # call_count is the total number of LLM API calls, which equals loop
-        # iterations 1:1. The previous per_model_summary sum was equivalent but
-        # read the wrong semantic (it grouped by model, not by loop turn).
         iterations = session._budget.call_count
+
+        # Compute which files were touched vs. what the task expected
+        snapshot_after = _snapshot_mtimes(work_dir)
+        touched = _changed_files(snapshot_before, snapshot_after)
+        expected = [p.replace("\\", "/") for p in task.expected_files_touched]
+        # A file counts as "covered" if any touched path ends with the expected path
+        missed = [p for p in expected if not any(t.endswith(p) for t in touched)]
 
         passed, output = self._oracle.evaluate_verbose(
             task.oracle_check,
@@ -329,4 +351,6 @@ class BenchRunner:
             iterations_used=iterations,
             cost_usd=cost,
             oracle_output=output[:500],
+            files_touched=touched,
+            files_missed=missed,
         )
