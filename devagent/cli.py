@@ -2394,6 +2394,7 @@ def bench_native(
 def bench_canary(
     threshold: float = typer.Option(0.80, "--threshold", help="Minimum pass rate (0.0–1.0)"),
     skip_legacy: bool = typer.Option(False, "--skip-legacy", help="Skip existing bench_*.py scripts"),
+    save_json: bool = typer.Option(False, "--save-json", help="Persist canary results to benchmarks/results/"),
 ) -> None:
     """Run the CI canary benchmark (B5) — no LLM required.
 
@@ -2456,6 +2457,46 @@ def bench_canary(
         f"[{color}]{passed_checks}/{total_checks} passed ({rate * 100:.0f}%)[/{color}]"
         f" | threshold={threshold * 100:.0f}%"
     )
+
+    if save_json:
+        import datetime
+
+        from devagent.bench.report import _RESULTS_DIR
+
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+        path = _RESULTS_DIR / f"canary_{ts}.json"
+        rows: list[dict] = [
+            {
+                "task_id": chk["id"],
+                "passed": chk["id"] not in failures,
+                "duration_sec": 0.0,
+                "iterations_used": 0,
+                "cost_usd": 0.0,
+                "files_touched": [],
+                "files_missed": [],
+                "oracle_output": "",
+            }
+            for chk in canary["framework_checks"]
+        ]
+        if not skip_legacy:
+            for script_rel in canary.get("legacy_scripts", []):
+                script_path = Path(__file__).parent.parent / script_rel
+                if script_path.exists():
+                    rows.append(
+                        {
+                            "task_id": script_rel,
+                            "passed": script_rel not in failures,
+                            "duration_sec": 0.0,
+                            "iterations_used": 0,
+                            "cost_usd": 0.0,
+                            "files_touched": [],
+                            "files_missed": [],
+                            "oracle_output": "",
+                        }
+                    )
+        path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        console.print(f"[dim]Canary results saved -> {path}[/dim]")
 
     if rate < threshold:
         console.print(f"[red]Canary FAILED — {len(failures)} check(s) failed: {failures}[/red]")
@@ -2535,14 +2576,57 @@ def bench_sweep(
 @bench_app.command("history")
 def bench_history(
     limit: int = typer.Option(10, "--limit", "-n", help="Show last N runs (0 = all)"),
+    remote: bool = typer.Option(False, "--remote", help="Fetch results from the bench-results git branch"),
 ) -> None:
     """Show a trend table comparing saved benchmark runs.
 
-    Reads native_*.json and sweep_*.json files from benchmarks/results/ and
-    displays pass rate, avg cost, avg iterations, and avg time per run.
+    Reads native_*.json, sweep_*.json, and canary_*.json from benchmarks/results/.
+    Use --remote to pull canary results persisted to the bench-results branch by CI.
     """
+    import re
+    import tempfile
+
     from devagent.bench.report import BenchReport
-    BenchReport.render_history(limit=limit if limit > 0 else None)
+
+    src_dir = None
+    if remote:
+        fetch_result = subprocess.run(
+            ["git", "fetch", "origin", "bench-results"],
+            capture_output=True,
+            text=True,
+        )
+        if fetch_result.returncode != 0:
+            console.print("[yellow]bench-results branch not found on origin — no remote results yet.[/yellow]")
+            return
+
+        ls_result = subprocess.run(
+            ["git", "ls-tree", "--name-only", "origin/bench-results"],
+            capture_output=True,
+            text=True,
+        )
+        filenames = [
+            f.strip()
+            for f in ls_result.stdout.splitlines()
+            if re.match(r"^(native|sweep|canary)_\d{8}_\d{6}\.json$", f.strip())
+        ]
+        if not filenames:
+            console.print("[yellow]No result files found on bench-results branch.[/yellow]")
+            return
+
+        tmp_dir = tempfile.mkdtemp(prefix="devagent_history_")
+        src_dir = Path(tmp_dir)
+        for fname in filenames:
+            show = subprocess.run(
+                ["git", "show", f"origin/bench-results:{fname}"],
+                capture_output=True,
+                text=True,
+            )
+            if show.returncode == 0:
+                (src_dir / fname).write_text(show.stdout, encoding="utf-8")
+
+        console.print(f"[dim]Loaded {len(filenames)} remote result file(s) from bench-results[/dim]")
+
+    BenchReport.render_history(limit=limit if limit > 0 else None, src_dir=src_dir)
 
 
 # ---------------------------------------------------------------------------

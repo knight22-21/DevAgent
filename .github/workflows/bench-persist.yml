@@ -1,0 +1,53 @@
+name: Persist Canary Results
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  persist:
+    name: Save canary result to bench-results branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install DevAgent
+        run: pip install -e ".[dev]"
+
+      - name: Run canary and save JSON
+        run: devagent bench canary --save-json
+
+      - name: Commit result to bench-results branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          RESULT=$(ls -t benchmarks/results/canary_*.json 2>/dev/null | head -1)
+          if [ -z "$RESULT" ]; then
+            echo "No canary result file found — skipping persist step"
+            exit 0
+          fi
+          FILENAME=$(basename "$RESULT")
+
+          # Switch to bench-results branch, creating it as an orphan if it does not exist
+          git fetch origin bench-results:bench-results 2>/dev/null \
+            || git checkout --orphan bench-results
+
+          git checkout bench-results 2>/dev/null || true
+
+          # Copy the new result file into the branch root
+          cp "$RESULT" "$FILENAME"
+          git add "$FILENAME"
+          git commit -m "ci: canary $FILENAME [skip ci]" || echo "Nothing to commit"
+          git push origin bench-results
