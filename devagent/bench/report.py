@@ -144,12 +144,13 @@ class BenchReport:
         return path
 
     @staticmethod
-    def render_history(limit: int | None = 10) -> None:
+    def render_history(limit: int | None = 10, src_dir: Path | None = None) -> None:
         """Print a trend table comparing saved benchmark runs.
 
-        Reads all native_*.json and sweep_*.json files from benchmarks/results/,
-        parses the timestamp from the filename, and shows pass rate, avg cost,
-        avg iterations, and avg time per run — most recent first.
+        Reads all native_*.json, sweep_*.json, and canary_*.json files from
+        benchmarks/results/ (or src_dir if provided), parses the timestamp from the
+        filename, and shows pass rate, avg cost, avg iterations, and avg time per
+        run — most recent first.
         """
         import re
 
@@ -158,14 +159,15 @@ class BenchReport:
 
         console = Console()
 
-        if not _RESULTS_DIR.exists():
+        results_dir = src_dir if src_dir is not None else _RESULTS_DIR
+        if not results_dir.exists():
             console.print("[yellow]No results directory found — run a benchmark first.[/yellow]")
             return
 
         # Collect result files (exclude partials)
         pattern = re.compile(r"^(native|sweep|canary)_(\d{8}_\d{6})\.json$")
         runs: list[tuple[str, str, list[dict]]] = []  # (label, ts_str, rows)
-        for path in _RESULTS_DIR.iterdir():
+        for path in results_dir.iterdir():
             m = pattern.match(path.name)
             if not m:
                 continue
