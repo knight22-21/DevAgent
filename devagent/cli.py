@@ -2436,6 +2436,8 @@ def bench_canary(
                 [sys.executable, str(script_path)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=str(bench_dir),
             )
             if result.returncode == 0:
