@@ -2394,6 +2394,7 @@ def bench_native(
 def bench_canary(
     threshold: float = typer.Option(0.80, "--threshold", help="Minimum pass rate (0.0–1.0)"),
     skip_legacy: bool = typer.Option(False, "--skip-legacy", help="Skip existing bench_*.py scripts"),
+    save_json: bool = typer.Option(False, "--save-json", help="Persist canary results to benchmarks/results/"),
 ) -> None:
     """Run the CI canary benchmark (B5) — no LLM required.
 
@@ -2456,6 +2457,46 @@ def bench_canary(
         f"[{color}]{passed_checks}/{total_checks} passed ({rate * 100:.0f}%)[/{color}]"
         f" | threshold={threshold * 100:.0f}%"
     )
+
+    if save_json:
+        import datetime
+
+        from devagent.bench.report import _RESULTS_DIR
+
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+        path = _RESULTS_DIR / f"canary_{ts}.json"
+        rows: list[dict] = [
+            {
+                "task_id": chk["id"],
+                "passed": chk["id"] not in failures,
+                "duration_sec": 0.0,
+                "iterations_used": 0,
+                "cost_usd": 0.0,
+                "files_touched": [],
+                "files_missed": [],
+                "oracle_output": "",
+            }
+            for chk in canary["framework_checks"]
+        ]
+        if not skip_legacy:
+            for script_rel in canary.get("legacy_scripts", []):
+                script_path = Path(__file__).parent.parent / script_rel
+                if script_path.exists():
+                    rows.append(
+                        {
+                            "task_id": script_rel,
+                            "passed": script_rel not in failures,
+                            "duration_sec": 0.0,
+                            "iterations_used": 0,
+                            "cost_usd": 0.0,
+                            "files_touched": [],
+                            "files_missed": [],
+                            "oracle_output": "",
+                        }
+                    )
+        path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        console.print(f"[dim]Canary results saved -> {path}[/dim]")
 
     if rate < threshold:
         console.print(f"[red]Canary FAILED — {len(failures)} check(s) failed: {failures}[/red]")

@@ -163,7 +163,7 @@ class BenchReport:
             return
 
         # Collect result files (exclude partials)
-        pattern = re.compile(r"^(native|sweep)_(\d{8}_\d{6})\.json$")
+        pattern = re.compile(r"^(native|sweep|canary)_(\d{8}_\d{6})\.json$")
         runs: list[tuple[str, str, list[dict]]] = []  # (label, ts_str, rows)
         for path in _RESULTS_DIR.iterdir():
             m = pattern.match(path.name)
@@ -217,4 +217,3 @@ class BenchReport:
             )
 
         console.print(table)
-        return path
