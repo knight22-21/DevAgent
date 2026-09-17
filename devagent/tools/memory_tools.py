@@ -83,3 +83,62 @@ def register_memory_tools(registry: ToolRegistry, memory_block) -> None:
         },
         _forget_fact,
     )
+
+
+def register_persistent_memory_tools(registry, project_memory) -> None:
+    """Register remember_persistent / forget_persistent tools backed by .devagent/memory.md."""
+
+    def _remember_persistent(args: dict) -> str:
+        key = str(args.get("key", "")).strip()
+        value = str(args.get("value", "")).strip()
+        if not key:
+            return "[error] remember_persistent: 'key' is required"
+        if not value:
+            return "[error] remember_persistent: 'value' is required"
+        project_memory.upsert(key, value)
+        return f"[persistent] {key} saved to .devagent/memory.md (survives sessions)"
+
+    def _forget_persistent(args: dict) -> str:
+        key = str(args.get("key", "")).strip()
+        if not key:
+            return "[error] forget_persistent: 'key' is required"
+        project_memory.delete(key)
+        return f"[persistent] {key} removed from .devagent/memory.md"
+
+    registry.register(
+        "remember_persistent",
+        (
+            "Store a key-value fact in .devagent/memory.md — persists across ALL sessions. "
+            "Use this for project-level facts that should survive compression and restarts: "
+            "tech stack, test command, important file locations, architectural decisions. "
+            "Prefer remember_fact for session-only context."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Short snake_case identifier (e.g. 'framework', 'test_command')",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The fact content (concise, preferably under 80 chars)",
+                },
+            },
+            "required": ["key", "value"],
+        },
+        _remember_persistent,
+    )
+
+    registry.register(
+        "forget_persistent",
+        "Remove a key from .devagent/memory.md (cross-session persistent memory).",
+        {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "The key to remove"},
+            },
+            "required": ["key"],
+        },
+        _forget_persistent,
+    )
