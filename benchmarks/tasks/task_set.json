@@ -258,5 +258,57 @@
     "max_iterations": 15,
     "timeout_sec": 120,
     "tags": ["onboarding", "documentation", "write"]
+  },
+  {
+    "id": "js-bug-fix-001",
+    "category": "bug_fix",
+    "difficulty": "easy",
+    "description": "The divide() function in src/math.js has a bug — it returns the wrong result. Fix it so all tests in tests/math.test.js pass. Run: node --test tests/math.test.js",
+    "fixture_project": "js_project",
+    "oracle_check": "node --test tests/math.test.js",
+    "oracle_pass_exit_code": 0,
+    "expected_files_touched": ["src/math.js"],
+    "max_iterations": 10,
+    "timeout_sec": 60,
+    "tags": ["javascript", "node", "bug_fix"]
+  },
+  {
+    "id": "js-feature-001",
+    "category": "feature_add",
+    "difficulty": "easy",
+    "description": "Add a camelCase(s) function to src/strings.js that converts 'hello world foo' to 'helloWorldFoo'. Make tests/strings.test.js pass. Run: node --test tests/strings.test.js",
+    "fixture_project": "js_project",
+    "oracle_check": "node --test tests/strings.test.js",
+    "oracle_pass_exit_code": 0,
+    "expected_files_touched": ["src/strings.js"],
+    "max_iterations": 10,
+    "timeout_sec": 60,
+    "tags": ["javascript", "node", "feature_add"]
+  },
+  {
+    "id": "go-bug-fix-001",
+    "category": "bug_fix",
+    "difficulty": "easy",
+    "description": "The Multiply() function in mathutils/math.go has a bug — it returns the wrong result. Fix it so all tests in mathutils/ pass. Run: go test ./mathutils/...",
+    "fixture_project": "go_project",
+    "oracle_check": "go test ./mathutils/...",
+    "oracle_pass_exit_code": 0,
+    "expected_files_touched": ["mathutils/math.go"],
+    "max_iterations": 10,
+    "timeout_sec": 60,
+    "tags": ["go", "bug_fix"]
+  },
+  {
+    "id": "go-feature-001",
+    "category": "feature_add",
+    "difficulty": "easy",
+    "description": "Implement the TitleCase(s string) string function in stringutils/strings.go — it should convert 'hello world' to 'Hello World'. Make stringutils tests pass. Run: go test ./stringutils/...",
+    "fixture_project": "go_project",
+    "oracle_check": "go test ./stringutils/...",
+    "oracle_pass_exit_code": 0,
+    "expected_files_touched": ["stringutils/strings.go"],
+    "max_iterations": 10,
+    "timeout_sec": 60,
+    "tags": ["go", "feature_add"]
   }
 ]

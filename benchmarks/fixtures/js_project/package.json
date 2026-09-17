@@ -1,0 +1,12 @@
+{
+  "name": "js-project",
+  "version": "1.0.0",
+  "description": "DevAgent benchmark fixture — JavaScript project",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
