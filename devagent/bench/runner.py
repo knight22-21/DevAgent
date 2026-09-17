@@ -311,9 +311,10 @@ class BenchRunner:
             )
 
         cost = session._budget.total_cost_usd
-        iterations = sum(
-            row.get("calls", 0) for row in session._budget.per_model_summary()
-        )
+        # call_count is the total number of LLM API calls, which equals loop
+        # iterations 1:1. The previous per_model_summary sum was equivalent but
+        # read the wrong semantic (it grouped by model, not by loop turn).
+        iterations = session._budget.call_count
 
         passed, output = self._oracle.evaluate_verbose(
             task.oracle_check,
