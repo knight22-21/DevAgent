@@ -17,9 +17,10 @@ ToolHandler = Callable[[dict[str, Any]], str]
 class ToolRegistry:
     """Registry of all tools available to the agent."""
 
-    def __init__(self) -> None:
+    def __init__(self, hook_runner=None) -> None:
         self._tools: dict[str, ToolDef] = {}
         self._handlers: dict[str, ToolHandler] = {}
+        self._hook_runner = hook_runner  # HookRunner | None
 
     def register(
         self,
@@ -38,10 +39,28 @@ class ToolRegistry:
         handler = self._handlers.get(name)
         if handler is None:
             return f"[tool_error] Unknown tool: {name!r}"
+
+        # Phase 10 — fire pre-tool-use hooks
+        if self._hook_runner is not None:
+            hook_result = self._hook_runner.pre_tool_use(name, args)
+            if not hook_result.allowed:
+                return f"[tool_error] Blocked by hook: {hook_result.feedback}"
+            if hook_result.rewritten_args is not None:
+                args = hook_result.rewritten_args
+
         try:
-            return handler(args)
+            result = handler(args)
         except Exception as exc:
             return f"[tool_error] {name} failed: {exc}"
+
+        # Phase 10 — fire post-tool-use hooks (best-effort, non-blocking)
+        if self._hook_runner is not None:
+            try:
+                self._hook_runner.post_tool_use(name, args, result)
+            except Exception:
+                pass
+
+        return result
 
     def names(self) -> list[str]:
         return list(self._tools.keys())
@@ -70,6 +89,8 @@ def build_registry(
     searchx_api_key: str = "",
     searchx_base_url: str = "http://localhost:8888",
     search_provider: str = "searchx",
+    # Phase 10 — hooks runner
+    hook_runner=None,                # HookRunner | None
 ) -> ToolRegistry:
     """Build and return the default tool registry with all built-in tools.
 
@@ -89,7 +110,7 @@ def build_registry(
     from devagent.tools.search_tools import register_search_tools
     from devagent.tools.shell_tool import register_shell_tool
 
-    registry = ToolRegistry()
+    registry = ToolRegistry(hook_runner=hook_runner)
     register_file_tools(registry, project_root)
     register_shell_tool(registry, project_root)
     register_search_tools(registry, project_root)

@@ -89,4 +89,20 @@ BUILTIN_SKILLS: list[Skill] = [
         model="cheap",
         max_iter=1,
     ),
+    Skill(
+        name="deep-research",
+        description="Fan-out web search + fetch + synthesise into a cited report",
+        prompt=(
+            "The user wants a deep research report on a topic. Follow these steps:\n"
+            "1. Break the topic into 4-6 distinct search queries covering different angles.\n"
+            "2. For each query: call web_search to get results, then call fetch_url on the "
+            "most relevant result URL to extract the full article text.\n"
+            "3. Synthesise all findings into a structured report with sections: "
+            "Summary, Key Findings, Tradeoffs / Caveats, Sources (with URLs).\n"
+            "Be technical and specific. Cite sources inline as [1], [2], etc."
+        ),
+        tools_only=["web_search", "fetch_url"],
+        model="planning",
+        max_iter=20,
+    ),
 ]

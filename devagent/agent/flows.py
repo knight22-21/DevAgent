@@ -118,6 +118,8 @@ class DevAgentSession:
         allow_tools: list[str] | None = None,
         output_format: str = "rich",
         system_prompt_override: str | None = None,
+        # Phase 10 — permission mode shorthand
+        permission_mode: str = "default",
     ) -> None:
         from devagent.agent import permissions as perm_registry
         from devagent.agent.loop import AgentLoop
@@ -165,10 +167,25 @@ class DevAgentSession:
         # --allow-tools is a shorthand: auto-allow exact tool name matches
         for tool_name in (allow_tools or []):
             rules.append(parse_rule(tool_name, "allow"))
+        # Phase 10 — permission_mode applies preset rule bundles
+        _interactive = interactive_approval
+        if not bare and permission_mode != "default":
+            if permission_mode == "read-only":
+                for t in ("write_file", "edit_file", "run_shell"):
+                    rules.append(parse_rule(t, "deny"))
+            elif permission_mode == "accept-edits":
+                for t in ("write_file", "edit_file"):
+                    rules.append(parse_rule(t, "allow"))
+            elif permission_mode == "yolo":
+                _interactive = False
+                rules.insert(0, parse_rule("*", "allow"))
+            elif permission_mode == "auto":
+                _interactive = False
+
         self._permission_mgr: PermissionManager | None = None
-        if not bare and (rules or interactive_approval):
+        if not bare and (rules or _interactive):
             self._permission_mgr = PermissionManager(
-                rules=rules, interactive=interactive_approval
+                rules=rules, interactive=_interactive
             )
             perm_registry.register(session_id, self._permission_mgr)
 
@@ -190,6 +207,18 @@ class DevAgentSession:
             self._console.print(f"\n[yellow]{msg}[/yellow]")
             return Confirm.ask("Proceed with write?", default=False)
 
+        # ── Hooks runner (Phase 10) ────────────────────────────────────
+        hook_runner = None
+        if not bare:
+            try:
+                from devagent.hooks.runner import HookRunner
+                hook_runner = HookRunner(self._project_root)
+                if hook_runner.hooks:
+                    hook_runner.session_start(session_id)
+            except Exception:
+                hook_runner = None
+        self._hook_runner = hook_runner
+
         # ── Tool registry ─────────────────────────────────────────────
         gh_token = cfg.github.token or None
         registry = build_registry(
@@ -204,6 +233,7 @@ class DevAgentSession:
             searchx_api_key=cfg.searchx.api_key,
             searchx_base_url=cfg.searchx.base_url,
             search_provider=cfg.search_provider,
+            hook_runner=hook_runner,
         )
 
         # ── Multi-model router (optional) ─────────────────────────────
@@ -228,8 +258,13 @@ class DevAgentSession:
         self._memory = memory
 
         # Memory tools — agent can explicitly store/recall facts across turns
-        from devagent.tools.memory_tools import register_memory_tools
+        from devagent.tools.memory_tools import (
+            register_memory_tools,
+            register_persistent_memory_tools,
+        )
         register_memory_tools(registry, memory)
+        # Phase 12 — persistent cross-session memory backed by .devagent/memory.md
+        register_persistent_memory_tools(registry, project_memory)
 
         # ── Sub-agent spawning (Phase 14) ────────────────────────────
         from devagent.tools.agent_tools import register_agent_tools
@@ -514,6 +549,228 @@ class DevAgentSession:
                 )
                 continue
 
+            # Phase 10 — /permissions: show active permission rules and hooks
+            if cmd == "/permissions":
+                lines: list[str] = []
+                if self._permission_mgr is None:
+                    lines.append("[dim]No permission rules active.[/dim]")
+                    lines.append("[dim]Use --allow/--deny or --permission-mode to configure.[/dim]")
+                else:
+                    lines.append("[bold]Permission rules (first match wins):[/bold]")
+                    for r in self._permission_mgr.rules:
+                        lines.append(f"  [{r.action}] {r.tool}:{r.pattern}")
+                if self._hook_runner and self._hook_runner.hooks:
+                    lines.append("\n[bold]Active hooks:[/bold]")
+                    for h in self._hook_runner.hooks:
+                        detail = h.command or h.url
+                        tool_str = f" (tool={h.tool})" if h.tool else " (all tools)"
+                        lines.append(f"  [{h.event}]{tool_str} [{h.type}] {detail}")
+                elif self._hook_runner:
+                    lines.append("\n[dim]No hooks configured in .devagent/hooks.toml[/dim]")
+                self._console.print(Panel("\n".join(lines), title="/permissions", border_style="cyan"))
+                continue
+
+            # Phase 13 — /status: session summary
+            if cmd == "/status":
+                lines = [
+                    f"Session:  {self.session_id[:8]}",
+                    f"Project:  {self._project_root}",
+                    f"Model:    {self._cfg.llm.provider}/{self._cfg.llm.model}",
+                    f"Effort:   {self._cfg.llm.effort}",
+                    f"{self._budget.status_line()}",
+                    f"Undo entries: {len(self._undo_stack)}",
+                    f"Security events: {len(self.security_log)}",
+                ]
+                self._console.print(Panel("\n".join(lines), title="/status", border_style="cyan"))
+                continue
+
+            # Phase 13 — /clear: reset conversation (start new session, keep project memory)
+            if cmd == "/clear":
+                new_sid = self._mgr.new(
+                    project=str(self._project_root),
+                    model=self._cfg.llm.model,
+                    provider=self._cfg.llm.provider,
+                )
+                self.session_id = new_sid
+                self._loop.session_id = new_sid
+                self._undo_stack.clear()
+                self._last_diff = ""
+                self._title_set = False
+                self._console.print("[dim]Conversation cleared. Persistent memory preserved.[/dim]")
+                continue
+
+            # Phase 13 — /rewind N: remove last N turns
+            if cmd.startswith("/rewind"):
+                parts = raw.split(None, 1)
+                n = 1
+                if len(parts) > 1:
+                    try:
+                        n = max(1, int(parts[1].strip()))
+                    except ValueError:
+                        self._console.print("[yellow]Usage: /rewind N  (N = number of turns to remove)[/yellow]")
+                        continue
+                from devagent.session import store as _store
+                removed = _store.trim_events(self.session_id, n)
+                self._console.print(f"[dim]Removed {removed} events ({n} turn(s) rewound).[/dim]")
+                continue
+
+            # Phase 13 — /context: token usage breakdown
+            if cmd == "/context":
+                budget = self._budget
+                lines = [
+                    f"Total tokens used this session:  {budget.total_tokens():,}",
+                ]
+                cap = getattr(budget, "_max_tokens", None)
+                if cap:
+                    pct = int(100 * budget.total_tokens() / cap)
+                    lines.append(f"Budget cap:  {cap:,} ({pct}% used)")
+                else:
+                    lines.append("Budget cap:  unlimited")
+                lines.append(f"Undo stack:  {len(self._undo_stack)} entries")
+                lines.append(f"\n{budget.status_line()}")
+                self._console.print(Panel("\n".join(lines), title="/context", border_style="blue"))
+                continue
+
+            # Phase 13 — /autocompact [tokens|off]
+            if cmd.startswith("/autocompact"):
+                parts = raw.split(None, 1)
+                if len(parts) < 2 or parts[1].strip().lower() == "off":
+                    self._cfg.session.auto_compress = False
+                    self._console.print("[dim]Auto-compress disabled.[/dim]")
+                else:
+                    try:
+                        self._cfg.session.auto_compress = True
+                        self._console.print("[dim]Auto-compress enabled.[/dim]")
+                    except ValueError:
+                        self._console.print("[yellow]Usage: /autocompact  or  /autocompact off[/yellow]")
+                continue
+
+            # Phase 13 — /goal <condition>: loop until the goal is met
+            if cmd.startswith("/goal"):
+                goal = raw[5:].strip()
+                if not goal:
+                    self._console.print("[yellow]Usage: /goal <condition to meet>[/yellow]")
+                    continue
+                self._console.print(f"[dim]Goal mode: looping until — {goal}[/dim]")
+                max_iters = 8
+                for gi in range(max_iters):
+                    self._console.print(f"[dim]Goal iteration {gi + 1}/{max_iters}…[/dim]")
+                    self.run_message(f"Work toward this goal: {goal}")
+                    check = self.run_message(
+                        f"GOAL CHECK — answer YES or NO only: Is this goal fully met? Goal: {goal}",
+                        quiet=True,
+                    )
+                    if check.strip().upper().startswith("YES"):
+                        self._console.print(f"[green]Goal met after {gi + 1} iteration(s).[/green]")
+                        break
+                else:
+                    self._console.print(f"[yellow]Goal not met after {max_iters} iterations.[/yellow]")
+                continue
+
+            # Phase 13 — /btw <question>: side question that doesn't enter the history
+            if cmd.startswith("/btw"):
+                question = raw[4:].strip()
+                if not question:
+                    self._console.print("[yellow]Usage: /btw <question>  (answer not saved to history)[/yellow]")
+                    continue
+                from devagent.session import store as _btw_store
+                events_before = _btw_store.get_events(self.session_id)
+                seq_before = max((e["seq"] for e in events_before), default=-1)
+                self.run_message(question)
+                # Remove all events added during the /btw turn
+                from devagent.session.store import _conn
+                try:
+                    with _conn() as conn:
+                        conn.execute(
+                            "DELETE FROM events WHERE session_id = ? AND seq > ?",
+                            (self.session_id, seq_before),
+                        )
+                except Exception:
+                    pass
+                self._console.print("[dim](response above not added to session history)[/dim]")
+                continue
+
+            # Phase 14 — /tasks: list background tasks
+            if cmd == "/tasks":
+                from devagent.session.task_store import get_store as _get_store
+                tasks = _get_store().list_tasks()
+                if not tasks:
+                    self._console.print("[dim]No background tasks.[/dim]")
+                else:
+                    for t in tasks:
+                        color = {"running": "yellow", "done": "green", "failed": "red"}.get(t.status, "white")
+                        self._console.print(
+                            f"  [{color}]{t.status}[/{color}]  {t.task_id}  {t.label}  ({t.elapsed:.0f}s)"
+                        )
+                        if t.result and t.status != "running":
+                            self._console.print(f"    [dim]{t.result[:120]}[/dim]")
+                continue
+
+            # Phase 14 — /fork <task>: run a task in a background thread
+            if cmd.startswith("/fork"):
+                fork_task = raw[5:].strip()
+                if not fork_task:
+                    self._console.print("[yellow]Usage: /fork <task description>[/yellow]")
+                    continue
+                import threading
+                import uuid
+
+                from devagent.session.task_store import get_store as _get_store
+                task_id = uuid.uuid4().hex[:8]
+                _get_store().add(task_id, fork_task[:60])
+                _cfg = self._cfg
+                _root = self._project_root
+                def _bg_run(tid=task_id, task=fork_task, cfg=_cfg, root=_root):
+                    try:
+                        from devagent.agent.flows import DevAgentSession
+                        bg = DevAgentSession(cfg, root, bare=True)
+                        result = bg.run_message(task, quiet=True)
+                        _get_store().complete(tid, result or "done")
+                    except Exception as exc:
+                        _get_store().complete(tid, str(exc), failed=True)
+                threading.Thread(target=_bg_run, daemon=True).start()
+                self._console.print(f"[dim]Background task {task_id}: {fork_task[:60]}[/dim]")
+                self._console.print("[dim]Check progress with /tasks[/dim]")
+                continue
+
+            # Phase 14 — /loop [interval] <command>: run a command on a schedule
+            if cmd.startswith("/loop"):
+                rest = raw[5:].strip()
+                if rest.lower() in ("", "off", "stop"):
+                    stop_ev = getattr(self, "_loop_stop_event", None)
+                    if stop_ev is not None:
+                        stop_ev.set()
+                        del self._loop_stop_event
+                        self._console.print("[dim]Loop stopped.[/dim]")
+                    else:
+                        self._console.print("[dim]No loop running.[/dim]")
+                    continue
+                import re as _re
+                import threading
+                m = _re.match(r"^(\d+)(m|s)\s+(.+)$", rest)
+                if m:
+                    interval = int(m.group(1)) * (60 if m.group(2) == "m" else 1)
+                    loop_cmd = m.group(3)
+                else:
+                    interval = 300
+                    loop_cmd = rest
+                stop_event = threading.Event()
+                self._loop_stop_event = stop_event
+                def _loop_runner(se=stop_event, cmd_str=loop_cmd, iv=interval, sess=self):
+                    while not se.is_set():
+                        se.wait(iv)
+                        if se.is_set():
+                            break
+                        try:
+                            sess.run_message(cmd_str, quiet=True)
+                        except Exception:
+                            pass
+                threading.Thread(target=_loop_runner, daemon=True).start()
+                self._console.print(
+                    f"[dim]Loop started: every {interval}s, command: {loop_cmd}  (type /loop off to stop)[/dim]"
+                )
+                continue
+
             # Phase 7.4 — Skills / slash commands
             if raw.startswith("/"):
                 parts = raw[1:].split(None, 1)
@@ -529,18 +786,24 @@ class DevAgentSession:
                     for sn, sk in skills.items():
                         self._console.print(f"  [cyan]/{sn}[/cyan]  {sk.description}")
                     self._console.print()
-                    self._console.print(
-                        "[dim]Built-in: /memory  /tokens  /security  /undo  /diff  /exit[/dim]"
-                    )
-                    self._console.print(
-                        "[dim]Effort:   /effort low|medium|high|xhigh|max  — change effort level[/dim]"
-                    )
-                    self._console.print(
-                        "[dim]Thinking: /think on|off  — toggle extended thinking (Anthropic)[/dim]"
-                    )
-                    self._console.print(
-                        "[dim]Shell:    !<command>  — run a shell command in the project root[/dim]"
-                    )
+                    self._console.print("[bold]Built-in commands:[/bold]")
+                    self._console.print("[dim]  /memory  /tokens  /security  /undo  /diff  /exit[/dim]")
+                    self._console.print("[dim]  /permissions — show permission rules and hooks[/dim]")
+                    self._console.print("[dim]  /status  — session summary (model, budget, undo stack)[/dim]")
+                    self._console.print("[dim]  /context — token breakdown[/dim]")
+                    self._console.print("[dim]  /clear   — reset conversation (keeps project memory)[/dim]")
+                    self._console.print("[dim]  /rewind N — remove last N turns from history[/dim]")
+                    self._console.print("[dim]  /autocompact [off] — toggle dynamic context compression[/dim]")
+                    self._console.print("[dim]  /goal <condition> — loop until goal is met[/dim]")
+                    self._console.print("[dim]  /btw <question> — side question (not saved to history)[/dim]")
+                    self._console.print("[bold]Background agents (Phase 14):[/bold]")
+                    self._console.print("[dim]  /fork <task> — run task in background thread[/dim]")
+                    self._console.print("[dim]  /tasks       — list background tasks[/dim]")
+                    self._console.print("[dim]  /loop [Ns|Nm] <cmd> — run command on schedule (/loop off to stop)[/dim]")
+                    self._console.print("[bold]Other:[/bold]")
+                    self._console.print("[dim]  /effort low|medium|high|xhigh|max  — change effort level[/dim]")
+                    self._console.print("[dim]  /think on|off  — toggle extended thinking (Anthropic)[/dim]")
+                    self._console.print("[dim]  !<command>  — run a shell command in the project root[/dim]")
                     continue
 
                 if skill_name in skills:
@@ -590,8 +853,10 @@ class DevAgentSession:
                 f"  |  effort: {effort}{think_suffix}{bare_suffix}\n"
                 f"[dim]Project: {self._project_root}[/dim]\n"
                 f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
-                "[dim]Skills: /explain  /test  /review  /commit  /summarize  /help[/dim]\n"
-                "[dim]Commands: /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd> shell escape[/dim]",
+                "[dim]Skills: /explain  /test  /review  /commit  /summarize  /deep-research  /help[/dim]\n"
+                "[dim]Session: /status  /context  /clear  /rewind N  /permissions  /goal  /btw  /autocompact[/dim]\n"
+                "[dim]Agents:  /fork <task>  /tasks  /loop [Ns] <cmd>  /loop off[/dim]\n"
+                "[dim]Other:   /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd>[/dim]",
                 border_style="cyan",
             )
         )
@@ -599,6 +864,11 @@ class DevAgentSession:
     def _print_exit(self) -> None:
         from devagent.agent import permissions as perm_registry
         perm_registry.unregister(self.session_id)
+        if self._hook_runner and self._hook_runner.hooks:
+            try:
+                self._hook_runner.session_end(self.session_id)
+            except Exception:
+                pass
         self._console.print(f"[dim]{self._budget.status_line()}[/dim]")
         if self.security_log:
             from devagent.tools.security_gate import format_security_report

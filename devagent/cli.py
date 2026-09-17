@@ -1532,6 +1532,10 @@ def run(
         None, "--allow-tools",
         help="Comma-separated tool names to auto-approve (e.g. 'run_shell,write_file')"
     ),
+    permission_mode: str = typer.Option(
+        "default", "--permission-mode",
+        help="Permission shorthand: default|accept-edits|read-only|auto|yolo",
+    ),
 ) -> None:
     """Start an interactive agent session (the main DevAgent command)."""
     from devagent.agent.flows import DevAgentSession
@@ -1562,6 +1566,7 @@ def run(
             effort=effort,
             bare=bare,
             allow_tools=tools_list,
+            permission_mode=permission_mode,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1603,6 +1608,10 @@ def do(
     output_format: str = typer.Option(
         "rich", "--output-format", help="Output format: rich (default) or stream-json"
     ),
+    permission_mode: str = typer.Option(
+        "default", "--permission-mode",
+        help="Permission shorthand: default|accept-edits|read-only|auto|yolo",
+    ),
 ) -> None:
     """Run a single task non-interactively and exit (exit code 0=success, 1=error)."""
     from devagent.agent.flows import DevAgentSession
@@ -1621,6 +1630,15 @@ def do(
     project_root, _ = detect_project_root(Path(project) if project else None)
     tools_list = [t.strip() for t in allow_tools.split(",")] if allow_tools else None
 
+    # Phase 11 — stdin pipe: prepend piped data to the task
+    if not sys.stdin.isatty():
+        try:
+            stdin_data = sys.stdin.read().strip()
+            if stdin_data:
+                task = f"<stdin>\n{stdin_data}\n</stdin>\n\n{task}"
+        except Exception:
+            pass
+
     try:
         session = DevAgentSession(
             cfg,
@@ -1630,6 +1648,7 @@ def do(
             effort=effort,
             bare=bare,
             allow_tools=tools_list,
+            permission_mode=permission_mode,
         )
     except Exception as exc:
         _handle_error(exc)
@@ -2509,6 +2528,176 @@ def bench_sweep(
         ]
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         console.print(f"\n[dim]Sweep results saved -> {path}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 — hooks subcommand group
+# ---------------------------------------------------------------------------
+
+hooks_app = typer.Typer(name="hooks", help="Manage DevAgent tool-use hooks.", add_completion=False)
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("list")
+def hooks_list(
+    project: str = typer.Option(".", "--project", "-p", help="Project root"),
+) -> None:
+    """List all hooks configured in .devagent/hooks.toml."""
+    from devagent.hooks.config import load_hooks
+    hooks = load_hooks(project)
+    if not hooks:
+        console.print("[dim]No hooks configured.[/dim]")
+        console.print("\nCreate [bold].devagent/hooks.toml[/bold]:")
+        console.print('[[hooks]]')
+        console.print('event   = "pre_tool_use"')
+        console.print('tool    = "run_shell"          # omit to match all tools')
+        console.print('type    = "command"')
+        console.print('command = "echo $DEVAGENT_TOOL_INPUT"')
+        return
+    for h in hooks:
+        tool_str = f" tool={h.tool}" if h.tool else " (all tools)"
+        detail = h.command or h.url
+        console.print(f"  [cyan]{h.event}[/cyan]{tool_str}  [{h.type}] {detail}")
+
+
+@hooks_app.command("test")
+def hooks_test(
+    event: str = typer.Argument("pre_tool_use", help="Event to test"),
+    tool: str = typer.Option("run_shell", "--tool", "-t", help="Tool name"),
+    args_json: str = typer.Option("{}", "--args", help="Tool args as JSON string"),
+    project: str = typer.Option(".", "--project", "-p", help="Project root"),
+) -> None:
+    """Dry-run hooks for a given event + tool without executing the real tool."""
+    import json as _json
+
+    from devagent.hooks.runner import HookRunner
+    runner = HookRunner(project)
+    if not runner.hooks:
+        console.print("[dim]No hooks loaded from .devagent/hooks.toml[/dim]")
+        return
+    try:
+        args = _json.loads(args_json)
+    except Exception:
+        console.print(f"[red]Invalid JSON: {args_json}[/red]")
+        raise typer.Exit(1)
+    result = runner.pre_tool_use(tool, args)
+    if result.allowed:
+        console.print("[green]allowed[/green]")
+        if result.rewritten_args is not None:
+            console.print(f"  rewritten args: {result.rewritten_args}")
+    else:
+        console.print(f"[red]blocked[/red]: {result.feedback}")
+        raise typer.Exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 14 — agent definition subcommand group
+# ---------------------------------------------------------------------------
+
+agent_app = typer.Typer(name="agent", help="Manage DevAgent agent definitions.", add_completion=False)
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command("list")
+def agent_list(
+    project: str = typer.Option(".", "--project", "-p", help="Project root"),
+) -> None:
+    """List agent definitions from .devagent/agents/*.toml."""
+    from devagent.agents.loader import load_agent_defs
+    defs = load_agent_defs(project)
+    if not defs:
+        console.print("[dim]No agent definitions found in .devagent/agents/[/dim]")
+        console.print("Run [bold cyan]devagent agent new <name>[/bold cyan] to create one.")
+        return
+    for name, ag in defs.items():
+        console.print(
+            f"  [cyan]{name}[/cyan]  {ag.description or '(no description)'}  "
+            f"[dim]model={ag.model}  max_iter={ag.max_iter}  perm={ag.permission}[/dim]"
+        )
+
+
+@agent_app.command("new")
+def agent_new(
+    name: str = typer.Argument(..., help="Agent slug (used as filename and invocation name)"),
+    project: str = typer.Option(".", "--project", "-p", help="Project root"),
+) -> None:
+    """Scaffold a new agent definition in .devagent/agents/<name>.toml."""
+    target = Path(project) / ".devagent" / "agents" / f"{name}.toml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        console.print(f"[yellow]Already exists: {target}[/yellow]")
+        raise typer.Exit(1)
+    template = (
+        f'name         = "{name}"\n'
+        f'description  = "Describe what this agent does"\n'
+        f'worker_type  = "implementer"\n'
+        f'model        = "coding"\n'
+        f'max_iter     = 20\n'
+        f'tools        = []  # empty = all tools\n'
+        f'permission   = "default"\n'
+        f'prompt       = """\n'
+        f'You are a specialised coding agent. Describe your role here.\n'
+        f'"""\n'
+    )
+    target.write_text(template, encoding="utf-8")
+    console.print(f"[green]Created:[/green] {target}")
+    console.print(f"Invoke in a session with: [bold cyan]/{name}[/bold cyan]")
+
+
+@agent_app.command("run")
+def agent_run(
+    name: str = typer.Argument(..., help="Agent name to run"),
+    task: str = typer.Option("", "--task", "-t", help="Task (uses agent's prompt if empty)"),
+    project: str = typer.Option(".", "--project", "-p", help="Project root"),
+    background: bool = typer.Option(False, "--background", "-b", help="Run in background thread"),
+) -> None:
+    """Run a named agent definition from .devagent/agents/."""
+    from devagent.agents.loader import load_agent_defs
+    defs = load_agent_defs(project)
+    if name not in defs:
+        console.print(f"[red]Agent not found: {name}[/red]")
+        console.print("Run [bold]devagent agent list[/bold] to see available agents.")
+        raise typer.Exit(1)
+    ag = defs[name]
+    cfg = load_config(project)
+    task_msg = task or ag.prompt or f"Run the {name} agent on the current project."
+    if background:
+        import threading
+        import uuid
+
+        from devagent.session.task_store import get_store as _get_store
+        task_id = uuid.uuid4().hex[:8]
+        _get_store().add(task_id, f"{name}: {task_msg[:40]}")
+        def _bg(tid=task_id, t=task_msg, c=cfg, r=project):
+            try:
+                from devagent.agent.flows import DevAgentSession
+                s = DevAgentSession(c, r, bare=True, permission_mode=ag.permission)
+                result = s.run_message(t, quiet=True)
+                _get_store().complete(tid, result or "done")
+            except Exception as exc:
+                _get_store().complete(tid, str(exc), failed=True)
+        threading.Thread(target=_bg, daemon=True).start()
+        console.print(f"[dim]Background task {task_id} started for agent: {name}[/dim]")
+        console.print("Check with: [bold]devagent tasks[/bold]")
+    else:
+        from devagent.agent.flows import DevAgentSession
+        session = DevAgentSession(cfg, project, permission_mode=ag.permission)
+        session.run_message(task_msg)
+
+
+@app.command("tasks")
+def list_tasks() -> None:
+    """List background agent tasks for this process."""
+    from devagent.session.task_store import get_store as _get_store
+    tasks = _get_store().list_tasks()
+    if not tasks:
+        console.print("[dim]No background tasks.[/dim]")
+        return
+    for t in tasks:
+        color = {"running": "yellow", "done": "green", "failed": "red"}.get(t.status, "white")
+        console.print(f"  [{color}]{t.status}[/{color}]  {t.task_id}  {t.label}  ({t.elapsed:.0f}s)")
+        if t.result and t.status != "running":
+            console.print(f"    [dim]{t.result[:120]}[/dim]")
 
 
 if __name__ == "__main__":
