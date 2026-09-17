@@ -142,3 +142,79 @@ class BenchReport:
         data = [BenchReport._result_to_dict(r) for r in results]
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return path
+
+    @staticmethod
+    def render_history(limit: int | None = 10) -> None:
+        """Print a trend table comparing saved benchmark runs.
+
+        Reads all native_*.json and sweep_*.json files from benchmarks/results/,
+        parses the timestamp from the filename, and shows pass rate, avg cost,
+        avg iterations, and avg time per run — most recent first.
+        """
+        import re
+
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+
+        if not _RESULTS_DIR.exists():
+            console.print("[yellow]No results directory found — run a benchmark first.[/yellow]")
+            return
+
+        # Collect result files (exclude partials)
+        pattern = re.compile(r"^(native|sweep)_(\d{8}_\d{6})\.json$")
+        runs: list[tuple[str, str, list[dict]]] = []  # (label, ts_str, rows)
+        for path in _RESULTS_DIR.iterdir():
+            m = pattern.match(path.name)
+            if not m:
+                continue
+            try:
+                rows = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(rows, list) or not rows:
+                    continue
+                runs.append((m.group(1), m.group(2), rows))
+            except Exception:  # noqa: S112
+                continue
+
+        if not runs:
+            console.print("[yellow]No completed result files found in benchmarks/results/.[/yellow]")
+            return
+
+        # Sort most-recent first, then apply limit
+        runs.sort(key=lambda r: r[1], reverse=True)
+        if limit is not None:
+            runs = runs[:limit]
+
+        table = Table(title="Benchmark History (most recent first)", border_style="cyan")
+        table.add_column("Run", style="cyan", no_wrap=True)
+        table.add_column("Date", no_wrap=True)
+        table.add_column("Pass Rate", justify="right")
+        table.add_column("Passed", justify="right")
+        table.add_column("Total", justify="right")
+        table.add_column("Avg Cost $", justify="right")
+        table.add_column("Avg Iter", justify="right")
+        table.add_column("Avg Time (s)", justify="right")
+
+        for label, ts_str, rows in runs:
+            date_fmt = f"{ts_str[:4]}-{ts_str[4:6]}-{ts_str[6:8]} {ts_str[9:11]}:{ts_str[11:13]}"
+            passed = sum(1 for r in rows if r.get("passed"))
+            total = len(rows)
+            rate = passed / total * 100 if total else 0
+            avg_cost = sum(r.get("cost_usd", 0) for r in rows) / total if total else 0
+            avg_iter = sum(r.get("iterations_used", 0) for r in rows) / total if total else 0
+            avg_time = sum(r.get("duration_sec", 0) for r in rows) / total if total else 0
+            color = "green" if rate >= 80 else "yellow" if rate >= 50 else "red"
+            table.add_row(
+                label,
+                date_fmt,
+                f"[{color}]{rate:.0f}%[/{color}]",
+                str(passed),
+                str(total),
+                f"{avg_cost:.4f}" if avg_cost else "-",
+                f"{avg_iter:.1f}" if avg_iter else "-",
+                f"{avg_time:.1f}" if avg_time else "-",
+            )
+
+        console.print(table)
+        return path
