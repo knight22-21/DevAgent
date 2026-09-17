@@ -2532,6 +2532,19 @@ def bench_sweep(
         console.print(f"\n[dim]Sweep results saved -> {path}[/dim]")
 
 
+@bench_app.command("history")
+def bench_history(
+    limit: int = typer.Option(10, "--limit", "-n", help="Show last N runs (0 = all)"),
+) -> None:
+    """Show a trend table comparing saved benchmark runs.
+
+    Reads native_*.json and sweep_*.json files from benchmarks/results/ and
+    displays pass rate, avg cost, avg iterations, and avg time per run.
+    """
+    from devagent.bench.report import BenchReport
+    BenchReport.render_history(limit=limit if limit > 0 else None)
+
+
 # ---------------------------------------------------------------------------
 # Phase 10 — hooks subcommand group
 # ---------------------------------------------------------------------------
