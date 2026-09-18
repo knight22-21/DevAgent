@@ -1,4 +1,4 @@
-name: Persist Canary Results
+name: Persist Bench Results
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
 
 jobs:
   persist:
-    name: Save canary result to bench-results branch
+    name: Save bench results to bench-results branch
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,23 +22,33 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
       - name: Install DevAgent
         run: pip install -e ".[dev]"
 
       - name: Run canary and save JSON
         run: devagent bench canary --save-json
 
-      - name: Commit result to bench-results branch
+      - name: Dry-run all tasks and save JSON
+        # Unmodified fixtures will fail the oracle — that is expected in dry mode.
+        # Exit code 1 is suppressed; the JSON is what we want to persist.
+        run: devagent bench native --dry || true
+
+      - name: Commit results to bench-results branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          RESULT=$(ls -t benchmarks/results/canary_*.json 2>/dev/null | head -1)
-          if [ -z "$RESULT" ]; then
-            echo "No canary result file found — skipping persist step"
+          # Collect all timestamped result files written this run (exclude partials)
+          RESULTS=$(ls benchmarks/results/canary_*.json benchmarks/results/native_*.json 2>/dev/null || true)
+          if [ -z "$RESULTS" ]; then
+            echo "No result files found — skipping persist step"
             exit 0
           fi
-          FILENAME=$(basename "$RESULT")
 
           # Switch to bench-results branch, creating it as an orphan if it does not exist
           git fetch origin bench-results:bench-results 2>/dev/null \
@@ -46,8 +56,13 @@ jobs:
 
           git checkout bench-results 2>/dev/null || true
 
-          # Copy the new result file into the branch root
-          cp "$RESULT" "$FILENAME"
-          git add "$FILENAME"
-          git commit -m "ci: canary $FILENAME [skip ci]" || echo "Nothing to commit"
+          # Copy each result file into the branch root
+          for RESULT in $RESULTS; do
+            FILENAME=$(basename "$RESULT")
+            cp "$RESULT" "$FILENAME"
+            git add "$FILENAME"
+          done
+
+          git commit -m "ci: bench results $(date -u +%Y%m%d_%H%M%S) [skip ci]" \
+            || echo "Nothing to commit"
           git push origin bench-results
