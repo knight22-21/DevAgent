@@ -1,0 +1,67 @@
+name: Benchmark Canary
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  canary:
+    name: Canary benchmark (no LLM)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install DevAgent
+        run: pip install -e ".[dev]"
+
+      - name: Run canary benchmark
+        run: python -m pytest tests/ -q --tb=short && devagent bench canary
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Validate Go fixtures
+        run: |
+          cd benchmarks/fixtures/go_project
+
+          # Both packages must compile cleanly
+          go build ./...
+          echo "go build: OK"
+
+          # mathutils — Multiply bug must cause test failure
+          if go test ./mathutils/... 2>&1; then
+            echo "ERROR: mathutils tests passed — Multiply bug may have been accidentally removed"
+            exit 1
+          fi
+          echo "mathutils: Multiply bug confirmed (go test failed as expected)"
+
+          # stringutils — missing TitleCase must cause test failure
+          if go test ./stringutils/... 2>&1; then
+            echo "ERROR: stringutils tests passed — TitleCase may have been accidentally added"
+            exit 1
+          fi
+          echo "stringutils: TitleCase missing confirmed (go test failed as expected)"
+
+      - name: Dry-run Go benchmark tasks
+        run: |
+          devagent bench native --dry --task-id go-bug-fix-001 || true
+          devagent bench native --dry --task-id go-feature-001 || true
+
+      - name: Upload canary results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-results
+          path: benchmarks/results/
+          if-no-files-found: ignore

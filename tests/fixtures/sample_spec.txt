@@ -1,0 +1,8 @@
+Add OAuth2 login with Google.
+
+Users should be able to click a "Sign in with Google" button on the login page.
+The OAuth2 flow should use PKCE for security.
+On first login, a new user account should be created automatically.
+On subsequent logins, the existing account should be matched by email.
+Session management should work the same as for email/password users.
+The user's Google profile picture should be stored and displayed.

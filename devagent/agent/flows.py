@@ -1,0 +1,1256 @@
+"""High-level agent flows built on top of AgentLoop + DevAgentSession.
+
+Each flow:
+  1. Parses the input (issue URL, PR URL, repo string, CI run URL)
+  2. Pre-fetches the relevant GitHub data (issue body, PR diff, run logs, …)
+  3. Builds a flow-specific system prompt extension
+  4. Creates a DevAgentSession and seeds it with a rich first message
+  5. Drops into the interactive REPL so the user can follow up
+
+Flows:
+  run_implement  — fetch issue → CodePrism context → edit → test → PR
+  run_review     — fetch PR diff → graph analysis → post inline review
+  run_triage     — classify open issues by effort → post triage comments
+  run_fix_ci     — read failed logs → locate code → propose fix
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm
+
+# ---------------------------------------------------------------------------
+# URL parsers (issue, PR, CI run)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ParsedIssue:
+    owner: str
+    repo: str
+    number: int
+    kind: str  # "issue" | "pull"
+
+
+@dataclass
+class _ParsedRun:
+    owner: str
+    repo: str
+    run_id: str
+
+
+def _parse_issue_or_pr_url(url: str) -> _ParsedIssue:
+    """Parse https://github.com/owner/repo/issues/N or /pull/N."""
+    m = re.match(
+        r"https?://github\.com/([^/]+)/([^/]+)/(issues|pull)/(\d+)",
+        url.strip(),
+    )
+    if not m:
+        raise ValueError(
+            f"Cannot parse GitHub issue/PR URL: {url!r}\n"
+            "Expected: https://github.com/owner/repo/issues/N"
+        )
+    return _ParsedIssue(
+        owner=m.group(1),
+        repo=m.group(2),
+        number=int(m.group(4)),
+        kind=m.group(3),
+    )
+
+
+def _parse_run_url(url: str) -> _ParsedRun:
+    """Parse https://github.com/owner/repo/actions/runs/RUN_ID."""
+    m = re.match(
+        r"https?://github\.com/([^/]+)/([^/]+)/actions/runs/(\d+)",
+        url.strip(),
+    )
+    if not m:
+        raise ValueError(
+            f"Cannot parse GitHub Actions run URL: {url!r}\n"
+            "Expected: https://github.com/owner/repo/actions/runs/RUN_ID"
+        )
+    return _ParsedRun(owner=m.group(1), repo=m.group(2), run_id=m.group(3))
+
+
+def _parse_repo(repo_or_url: str) -> tuple[str, str]:
+    """Accept 'owner/repo' or 'https://github.com/owner/repo'."""
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?$", repo_or_url.strip())
+    if m:
+        return m.group(1), m.group(2)
+    parts = repo_or_url.strip().split("/")
+    if len(parts) == 2 and all(parts):
+        return parts[0], parts[1]
+    raise ValueError(f"Cannot parse repo: {repo_or_url!r}. Use 'owner/repo'.")
+
+
+# ---------------------------------------------------------------------------
+# DevAgentSession — the shared agent stack
+# ---------------------------------------------------------------------------
+
+class DevAgentSession:
+    """Full agent session: LLM + tools + memory + budget + security gate.
+
+    Usage:
+        session = DevAgentSession(cfg, project_root)
+        session.interactive_repl(first_message="Implement issue #42 …")
+    """
+
+    def __init__(
+        self,
+        cfg,                          # DevAgentConfig
+        project_root: str | Path,
+        *,
+        max_tokens: int | None = None,
+        extra_system: str = "",
+        resume_id: str | None = None,
+        no_limit: bool = False,       # Phase 7.2: remove iteration cap
+        plan_mode: bool = False,      # Phase 7.3: generate plan before first task
+        allow: list[str] | None = None,   # Phase 10: auto-allow patterns
+        deny: list[str] | None = None,    # Phase 10: auto-deny patterns
+        interactive_approval: bool = False,  # Phase 10: pause for approval when no rule matches
+        # Phase 15 — effort, bare mode, CI hardening
+        effort: str | None = None,
+        bare: bool = False,
+        allow_tools: list[str] | None = None,
+        output_format: str = "rich",
+        system_prompt_override: str | None = None,
+        # Phase 10 — permission mode shorthand
+        permission_mode: str = "default",
+    ) -> None:
+        from devagent.agent import permissions as perm_registry
+        from devagent.agent.loop import AgentLoop
+        from devagent.agent.permissions import PermissionManager, parse_rule
+        from devagent.agent.system_prompt import build_system_prompt
+        from devagent.core.llm import LLMClient
+        from devagent.session.budget import TokenBudget
+        from devagent.session.manager import SessionManager
+        from devagent.session.memory import MemoryBlock
+        from devagent.tools.registry import build_registry
+
+        self._cfg = cfg
+        self._project_root = Path(project_root).resolve()
+        self._console = Console()
+        self.security_log: list = []
+        self._output_format = output_format
+
+        # Apply effort override before anything reads cfg.llm.effort
+        if effort is not None:
+            cfg.llm.effort = effort
+
+        # ── Session ──────────────────────────────────────────────────
+        mgr = SessionManager()
+        if resume_id:
+            sessions = mgr.list(limit=200)
+            match = next((s for s in sessions if s["id"].startswith(resume_id)), None)
+            if not match:
+                raise ValueError(f"Session not found: {resume_id}")
+            session_id = match["id"]
+        else:
+            session_id = mgr.new(
+                project=str(self._project_root),
+                model=cfg.llm.model,
+                provider=cfg.llm.provider,
+            )
+        self._mgr = mgr
+        self.session_id = session_id
+
+        # ── Permission manager (Phase 10 / Phase 15) ─────────────────
+        rules = []
+        for spec in (deny or []):
+            rules.append(parse_rule(spec, "deny"))
+        for spec in (allow or []):
+            rules.append(parse_rule(spec, "allow"))
+        # --allow-tools is a shorthand: auto-allow exact tool name matches
+        for tool_name in (allow_tools or []):
+            rules.append(parse_rule(tool_name, "allow"))
+        # Phase 10 — permission_mode applies preset rule bundles
+        _interactive = interactive_approval
+        if not bare and permission_mode != "default":
+            if permission_mode == "read-only":
+                for t in ("write_file", "edit_file", "run_shell"):
+                    rules.append(parse_rule(t, "deny"))
+            elif permission_mode == "accept-edits":
+                for t in ("write_file", "edit_file"):
+                    rules.append(parse_rule(t, "allow"))
+            elif permission_mode == "yolo":
+                _interactive = False
+                rules.insert(0, parse_rule("*", "allow"))
+            elif permission_mode == "auto":
+                _interactive = False
+
+        self._permission_mgr: PermissionManager | None = None
+        if not bare and (rules or _interactive):
+            self._permission_mgr = PermissionManager(
+                rules=rules, interactive=_interactive
+            )
+            perm_registry.register(session_id, self._permission_mgr)
+
+        # ── CodePrism (optional; skipped in bare mode) ───────────────
+        cp_client = None
+        if not bare:
+            try:
+                from devagent.codeprism.client import CodePrismClient
+                cp = CodePrismClient(str(self._project_root))
+                if cp.is_indexed:
+                    cp.attach_session(session_id)
+                    cp_client = cp
+            except Exception:
+                pass
+        self._cp_client = cp_client
+
+        # ── Security gate confirm callback ────────────────────────────
+        def _confirm(msg: str) -> bool:
+            self._console.print(f"\n[yellow]{msg}[/yellow]")
+            return Confirm.ask("Proceed with write?", default=False)
+
+        # ── Hooks runner (Phase 10) ────────────────────────────────────
+        hook_runner = None
+        if not bare:
+            try:
+                from devagent.hooks.runner import HookRunner
+                hook_runner = HookRunner(self._project_root)
+                if hook_runner.hooks:
+                    hook_runner.session_start(session_id)
+            except Exception:
+                hook_runner = None
+        self._hook_runner = hook_runner
+
+        # ── Tool registry ─────────────────────────────────────────────
+        gh_token = cfg.github.token or None
+        registry = build_registry(
+            project_root=str(self._project_root),
+            codeprism_client=cp_client,
+            security_log=self.security_log,
+            confirm_fn=_confirm if cp_client else None,
+            github_token=gh_token,
+            session_id=session_id,
+            provider=cfg.llm.provider,
+            brave_api_key=cfg.brave.api_key,
+            searchx_api_key=cfg.searchx.api_key,
+            searchx_base_url=cfg.searchx.base_url,
+            search_provider=cfg.search_provider,
+            hook_runner=hook_runner,
+        )
+
+        # ── Multi-model router (optional) ─────────────────────────────
+        router = None
+        try:
+            from devagent.core.router import MultiModelRouter
+            router = MultiModelRouter(cfg)
+        except Exception:
+            pass
+
+        # ── Budget, memory, prompt, loop ─────────────────────────────
+        budget = TokenBudget(
+            max_tokens=max_tokens,
+            warn_at_percent=cfg.budget.warn_at_percent,
+        )
+        self._budget = budget
+
+        from devagent.agent.system_prompt import load_devagent_md
+        from devagent.session.project_memory import ProjectMemory
+        project_memory = ProjectMemory(self._project_root)
+        memory = MemoryBlock(session_id, project_memory=project_memory)
+        self._memory = memory
+
+        # Memory tools — agent can explicitly store/recall facts across turns
+        from devagent.tools.memory_tools import (
+            register_memory_tools,
+            register_persistent_memory_tools,
+        )
+        register_memory_tools(registry, memory)
+        # Phase 12 — persistent cross-session memory backed by .devagent/memory.md
+        register_persistent_memory_tools(registry, project_memory)
+
+        # ── Sub-agent spawning (Phase 14) ────────────────────────────
+        from devagent.tools.agent_tools import register_agent_tools
+        register_agent_tools(registry, cfg, str(self._project_root))
+
+        # ── Undo stack (Phase 13) ─────────────────────────────────────
+        # Each entry: {"path": str, "before": str | None}
+        # before=None means the file did not exist before the write (new file).
+        self._undo_stack: list[dict] = []
+        self._last_diff: str = ""
+        self._wrap_file_tools_for_undo(registry)
+
+        # Bare mode: omit DEVAGENT.md from the system prompt
+        if system_prompt_override:
+            system_prompt = system_prompt_override
+        else:
+            devagent_md = "" if bare else load_devagent_md(self._project_root)
+            system_prompt = build_system_prompt(
+                project_description=f"Project: {self._project_root.name}",
+                extra_context=extra_system,
+                devagent_md=devagent_md,
+            )
+
+        llm = LLMClient(cfg.llm)
+        import sys
+        max_iters = sys.maxsize if no_limit else cfg.agent.max_iterations
+        self._loop = AgentLoop(
+            llm=llm,
+            registry=registry,
+            session_mgr=mgr,
+            session_id=session_id,
+            memory=memory,
+            budget=budget,
+            system_prompt=system_prompt,
+            codeprism_client=cp_client,
+            router=router,
+            max_iterations=max_iters,
+            loop_detection=cfg.agent.loop_detection,
+            permission_mgr=self._permission_mgr,
+            bare=bare,
+        )
+
+        # Phase 15 — expose effort and bare for REPL commands
+        self._bare = bare
+        self._llm_client = llm  # kept so /effort and /think can mutate cfg.llm live
+
+        # Status flags for the REPL
+        self._cp_active = cp_client is not None
+        self._gh_active = bool(gh_token)
+        self._router_active = router is not None
+        self._title_set = resume_id is not None
+        self._plan_mode = plan_mode
+        self._llm = LLMClient(cfg.llm)  # kept for plan generation
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _wrap_file_tools_for_undo(self, registry) -> None:
+        """Wrap edit_file and write_file to capture before-state for /undo."""
+        _UNDO_TOOLS = ("edit_file", "write_file")
+        _MAX_UNDO = 20
+
+        for tool_name in _UNDO_TOOLS:
+            original = registry._handlers.get(tool_name)
+            if original is None:
+                continue
+
+            def _make_wrapper(fn: object, tn: str):
+                def wrapper(args: dict) -> str:
+                    path = args.get("path", "")
+                    target = self._project_root / path
+                    before: str | None = None
+                    try:
+                        if target.exists():
+                            before = target.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+                    result: str = fn(args)  # type: ignore[operator]
+                    if not result.startswith("[error]") and not result.startswith("[tool_error]"):
+                        self._undo_stack.append({"path": path, "before": before, "tool": tn})
+                        if len(self._undo_stack) > _MAX_UNDO:
+                            self._undo_stack.pop(0)
+                    return result
+                return wrapper
+
+            registry._handlers[tool_name] = _make_wrapper(original, tool_name)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def _maybe_compress(self) -> None:
+        """Auto-compress history if it has grown past the configured threshold."""
+        if not self._cfg.session.auto_compress:
+            return
+        try:
+            from devagent.session.compressor import maybe_compress
+            result = maybe_compress(
+                session_id=self.session_id,
+                llm=self._llm,
+                session_cfg=self._cfg.session,
+            )
+            if result:
+                self._console.print(
+                    f"[dim]Auto-compressed {result.events_compressed} events "
+                    f"(~{result.tokens_saved} tokens saved).[/dim]"
+                )
+        except Exception:
+            pass  # compression is best-effort; never block a turn
+
+    def run_message(self, message: str, quiet: bool = False) -> str:
+        """Drive one user turn; render events. Returns the final LLM text.
+
+        quiet=True suppresses all terminal output (used by background watcher).
+        On the first call when plan_mode=True, generates and presents a plan for
+        approval before executing.
+        """
+        from devagent.agent.loop import FinalAnswerEvent
+        from devagent.output.streaming import render_events
+
+        # Auto-compress long sessions before each turn
+        if not quiet:
+            self._maybe_compress()
+
+        # Plan mode: intercept the first user message
+        if self._plan_mode:
+            self._plan_mode = False  # only applies once per session
+            from devagent.agent.planner import generate_plan
+            from devagent.output.plan_renderer import plan_to_first_message, render_plan
+
+            with self._console.status("[cyan]Generating plan...[/cyan]"):
+                plan = generate_plan(self._llm, message, self._project_root.name)
+
+            result = render_plan(plan, self._console)
+            if result == "cancel":
+                self._console.print("[dim]Task cancelled.[/dim]")
+                return ""
+            message = plan_to_first_message(plan, message)
+
+        if quiet:
+            final = ""
+            for event in self._loop.run(message):
+                if isinstance(event, FinalAnswerEvent):
+                    final = event.text
+            return final
+
+        # Tee the event stream to capture the most recent diff for /diff command
+        from devagent.agent.loop import ToolResultEvent as _TRE
+
+        def _tee(gen):
+            for event in gen:
+                if isinstance(event, _TRE) and event.diff:
+                    self._last_diff = event.diff
+                yield event
+
+        return render_events(_tee(self._loop.run(message)), permission_mgr=self._permission_mgr)
+
+    def interactive_repl(self, *, first_message: str | None = None) -> None:
+        """Run the interactive REPL, optionally seeding with first_message."""
+        if first_message:
+            self.run_message(first_message)
+            self._title_set = True  # seeded message serves as title
+
+        while True:
+            try:
+                raw = self._console.input("[bold cyan]>[/bold cyan] ").strip()
+            except (EOFError, KeyboardInterrupt):
+                self._console.print("\n[dim]Session ended.[/dim]")
+                self._print_exit()
+                break
+
+            if not raw:
+                continue
+
+            # Phase 13 — shell escape: !<command> runs in the project root
+            if raw.startswith("!"):
+                import subprocess
+                shell_cmd = raw[1:].strip()
+                if shell_cmd:
+                    proc = subprocess.run(
+                        shell_cmd, shell=True, capture_output=True, text=True,
+                        cwd=str(self._project_root),
+                    )
+                    if proc.stdout:
+                        self._console.print(proc.stdout, end="")
+                    if proc.stderr:
+                        self._console.print(proc.stderr, style="dim red", end="")
+                continue
+
+            cmd = raw.lower()
+
+            if cmd in ("/exit", "/quit", "exit", "quit"):
+                self._console.print("[dim]Session ended.[/dim]")
+                self._print_exit()
+                break
+
+            # Phase 13 — /undo: restore the last file the agent wrote or edited
+            if cmd == "/undo":
+                if not self._undo_stack:
+                    self._console.print("[yellow]Nothing to undo.[/yellow]")
+                else:
+                    entry = self._undo_stack.pop()
+                    path, before = entry["path"], entry["before"]
+                    target = self._project_root / path
+                    if before is None:
+                        target.unlink(missing_ok=True)
+                        self._console.print(f"[green]Undone:[/green] deleted {path} (was a new file)")
+                    else:
+                        target.write_text(before, encoding="utf-8")
+                        self._console.print(f"[green]Undone:[/green] restored {path}")
+                continue
+
+            # Phase 13 — /diff: replay the last inline diff
+            if cmd == "/diff":
+                if not self._last_diff:
+                    self._console.print("[dim]No diff recorded yet.[/dim]")
+                else:
+                    from devagent.output.streaming import render_diff
+                    render_diff(self._last_diff)
+                continue
+
+            # Phase 15 — /effort: change effort level for the rest of the session
+            if cmd.startswith("/effort"):
+                parts = raw.split(None, 1)
+                valid = ("low", "medium", "high", "xhigh", "max")
+                if len(parts) < 2 or parts[1].strip().lower() not in valid:
+                    current = self._cfg.llm.effort
+                    self._console.print(
+                        f"[dim]Current effort: [bold]{current}[/bold]\n"
+                        f"Usage: /effort low|medium|high|xhigh|max[/dim]"
+                    )
+                else:
+                    new_effort = parts[1].strip().lower()
+                    self._cfg.llm.effort = new_effort
+                    self._console.print(f"[dim]Effort set to [bold]{new_effort}[/bold][/dim]")
+                continue
+
+            # Phase 15 — /think: toggle extended thinking (Anthropic only)
+            if cmd.startswith("/think"):
+                parts = raw.split(None, 1)
+                if len(parts) < 2 or parts[1].strip().lower() not in ("on", "off"):
+                    state = "on" if self._cfg.llm.extended_thinking else "off"
+                    self._console.print(
+                        f"[dim]Extended thinking: [bold]{state}[/bold]\n"
+                        f"Usage: /think on|off  (Anthropic only; auto-activates for xhigh/max effort)[/dim]"
+                    )
+                else:
+                    enable = parts[1].strip().lower() == "on"
+                    self._cfg.llm.extended_thinking = enable
+                    state = "enabled" if enable else "disabled"
+                    self._console.print(f"[dim]Extended thinking {state}[/dim]")
+                continue
+
+            if cmd == "/memory":
+                mem = self._memory.all()
+                if mem:
+                    for k, v in mem.items():
+                        self._console.print(f"  [bold]{k}[/bold]: {v}")
+                else:
+                    self._console.print("[dim]No memory items.[/dim]")
+                continue
+
+            if cmd == "/tokens":
+                self._console.print(f"  [dim]{self._budget.status_line()}[/dim]")
+                for row in self._budget.per_model_summary():
+                    self._console.print(
+                        f"    {row['provider']}/{row['model']}: "
+                        f"{row['input_tokens']:,}in / {row['output_tokens']:,}out  "
+                        f"${row['cost_usd']:.4f}  ({row['calls']} calls)"
+                    )
+                continue
+
+            if cmd == "/security":
+                from devagent.tools.security_gate import format_security_report
+                self._console.print(
+                    Panel(
+                        format_security_report(self.security_log),
+                        title="Security Gate",
+                        border_style="yellow",
+                    )
+                )
+                continue
+
+            # Phase 10 — /permissions: show active permission rules and hooks
+            if cmd == "/permissions":
+                lines: list[str] = []
+                if self._permission_mgr is None:
+                    lines.append("[dim]No permission rules active.[/dim]")
+                    lines.append("[dim]Use --allow/--deny or --permission-mode to configure.[/dim]")
+                else:
+                    lines.append("[bold]Permission rules (first match wins):[/bold]")
+                    for r in self._permission_mgr.rules:
+                        lines.append(f"  [{r.action}] {r.tool}:{r.pattern}")
+                if self._hook_runner and self._hook_runner.hooks:
+                    lines.append("\n[bold]Active hooks:[/bold]")
+                    for h in self._hook_runner.hooks:
+                        detail = h.command or h.url
+                        tool_str = f" (tool={h.tool})" if h.tool else " (all tools)"
+                        lines.append(f"  [{h.event}]{tool_str} [{h.type}] {detail}")
+                elif self._hook_runner:
+                    lines.append("\n[dim]No hooks configured in .devagent/hooks.toml[/dim]")
+                self._console.print(Panel("\n".join(lines), title="/permissions", border_style="cyan"))
+                continue
+
+            # Phase 13 — /status: session summary
+            if cmd == "/status":
+                lines = [
+                    f"Session:  {self.session_id[:8]}",
+                    f"Project:  {self._project_root}",
+                    f"Model:    {self._cfg.llm.provider}/{self._cfg.llm.model}",
+                    f"Effort:   {self._cfg.llm.effort}",
+                    f"{self._budget.status_line()}",
+                    f"Undo entries: {len(self._undo_stack)}",
+                    f"Security events: {len(self.security_log)}",
+                ]
+                self._console.print(Panel("\n".join(lines), title="/status", border_style="cyan"))
+                continue
+
+            # Phase 13 — /clear: reset conversation (start new session, keep project memory)
+            if cmd == "/clear":
+                new_sid = self._mgr.new(
+                    project=str(self._project_root),
+                    model=self._cfg.llm.model,
+                    provider=self._cfg.llm.provider,
+                )
+                self.session_id = new_sid
+                self._loop.session_id = new_sid
+                self._undo_stack.clear()
+                self._last_diff = ""
+                self._title_set = False
+                self._console.print("[dim]Conversation cleared. Persistent memory preserved.[/dim]")
+                continue
+
+            # Phase 13 — /rewind N: remove last N turns
+            if cmd.startswith("/rewind"):
+                parts = raw.split(None, 1)
+                n = 1
+                if len(parts) > 1:
+                    try:
+                        n = max(1, int(parts[1].strip()))
+                    except ValueError:
+                        self._console.print("[yellow]Usage: /rewind N  (N = number of turns to remove)[/yellow]")
+                        continue
+                from devagent.session import store as _store
+                removed = _store.trim_events(self.session_id, n)
+                self._console.print(f"[dim]Removed {removed} events ({n} turn(s) rewound).[/dim]")
+                continue
+
+            # Phase 13 — /context: token usage breakdown
+            if cmd == "/context":
+                budget = self._budget
+                lines = [
+                    f"Total tokens used this session:  {budget.total_tokens():,}",
+                ]
+                cap = getattr(budget, "_max_tokens", None)
+                if cap:
+                    pct = int(100 * budget.total_tokens() / cap)
+                    lines.append(f"Budget cap:  {cap:,} ({pct}% used)")
+                else:
+                    lines.append("Budget cap:  unlimited")
+                lines.append(f"Undo stack:  {len(self._undo_stack)} entries")
+                lines.append(f"\n{budget.status_line()}")
+                self._console.print(Panel("\n".join(lines), title="/context", border_style="blue"))
+                continue
+
+            # Phase 13 — /autocompact [tokens|off]
+            if cmd.startswith("/autocompact"):
+                parts = raw.split(None, 1)
+                if len(parts) < 2 or parts[1].strip().lower() == "off":
+                    self._cfg.session.auto_compress = False
+                    self._console.print("[dim]Auto-compress disabled.[/dim]")
+                else:
+                    try:
+                        self._cfg.session.auto_compress = True
+                        self._console.print("[dim]Auto-compress enabled.[/dim]")
+                    except ValueError:
+                        self._console.print("[yellow]Usage: /autocompact  or  /autocompact off[/yellow]")
+                continue
+
+            # Phase 13 — /goal <condition>: loop until the goal is met
+            if cmd.startswith("/goal"):
+                goal = raw[5:].strip()
+                if not goal:
+                    self._console.print("[yellow]Usage: /goal <condition to meet>[/yellow]")
+                    continue
+                self._console.print(f"[dim]Goal mode: looping until — {goal}[/dim]")
+                max_iters = 8
+                for gi in range(max_iters):
+                    self._console.print(f"[dim]Goal iteration {gi + 1}/{max_iters}…[/dim]")
+                    self.run_message(f"Work toward this goal: {goal}")
+                    check = self.run_message(
+                        f"GOAL CHECK — answer YES or NO only: Is this goal fully met? Goal: {goal}",
+                        quiet=True,
+                    )
+                    if check.strip().upper().startswith("YES"):
+                        self._console.print(f"[green]Goal met after {gi + 1} iteration(s).[/green]")
+                        break
+                else:
+                    self._console.print(f"[yellow]Goal not met after {max_iters} iterations.[/yellow]")
+                continue
+
+            # Phase 13 — /btw <question>: side question that doesn't enter the history
+            if cmd.startswith("/btw"):
+                question = raw[4:].strip()
+                if not question:
+                    self._console.print("[yellow]Usage: /btw <question>  (answer not saved to history)[/yellow]")
+                    continue
+                from devagent.session import store as _btw_store
+                events_before = _btw_store.get_events(self.session_id)
+                seq_before = max((e["seq"] for e in events_before), default=-1)
+                self.run_message(question)
+                # Remove all events added during the /btw turn
+                from devagent.session.store import _conn
+                try:
+                    with _conn() as conn:
+                        conn.execute(
+                            "DELETE FROM events WHERE session_id = ? AND seq > ?",
+                            (self.session_id, seq_before),
+                        )
+                except Exception:
+                    pass
+                self._console.print("[dim](response above not added to session history)[/dim]")
+                continue
+
+            # Phase 14 — /tasks: list background tasks
+            if cmd == "/tasks":
+                from devagent.session.task_store import get_store as _get_store
+                tasks = _get_store().list_tasks()
+                if not tasks:
+                    self._console.print("[dim]No background tasks.[/dim]")
+                else:
+                    for t in tasks:
+                        color = {"running": "yellow", "done": "green", "failed": "red"}.get(t.status, "white")
+                        self._console.print(
+                            f"  [{color}]{t.status}[/{color}]  {t.task_id}  {t.label}  ({t.elapsed:.0f}s)"
+                        )
+                        if t.result and t.status != "running":
+                            self._console.print(f"    [dim]{t.result[:120]}[/dim]")
+                continue
+
+            # Phase 14 — /fork <task>: run a task in a background thread
+            if cmd.startswith("/fork"):
+                fork_task = raw[5:].strip()
+                if not fork_task:
+                    self._console.print("[yellow]Usage: /fork <task description>[/yellow]")
+                    continue
+                import threading
+                import uuid
+
+                from devagent.session.task_store import get_store as _get_store
+                task_id = uuid.uuid4().hex[:8]
+                _get_store().add(task_id, fork_task[:60])
+                _cfg = self._cfg
+                _root = self._project_root
+                def _bg_run(tid=task_id, task=fork_task, cfg=_cfg, root=_root):
+                    try:
+                        from devagent.agent.flows import DevAgentSession
+                        bg = DevAgentSession(cfg, root, bare=True)
+                        result = bg.run_message(task, quiet=True)
+                        _get_store().complete(tid, result or "done")
+                    except Exception as exc:
+                        _get_store().complete(tid, str(exc), failed=True)
+                threading.Thread(target=_bg_run, daemon=True).start()
+                self._console.print(f"[dim]Background task {task_id}: {fork_task[:60]}[/dim]")
+                self._console.print("[dim]Check progress with /tasks[/dim]")
+                continue
+
+            # Phase 14 — /loop [interval] <command>: run a command on a schedule
+            if cmd.startswith("/loop"):
+                rest = raw[5:].strip()
+                if rest.lower() in ("", "off", "stop"):
+                    stop_ev = getattr(self, "_loop_stop_event", None)
+                    if stop_ev is not None:
+                        stop_ev.set()
+                        del self._loop_stop_event
+                        self._console.print("[dim]Loop stopped.[/dim]")
+                    else:
+                        self._console.print("[dim]No loop running.[/dim]")
+                    continue
+                import re as _re
+                import threading
+                m = _re.match(r"^(\d+)(m|s)\s+(.+)$", rest)
+                if m:
+                    interval = int(m.group(1)) * (60 if m.group(2) == "m" else 1)
+                    loop_cmd = m.group(3)
+                else:
+                    interval = 300
+                    loop_cmd = rest
+                stop_event = threading.Event()
+                self._loop_stop_event = stop_event
+                def _loop_runner(se=stop_event, cmd_str=loop_cmd, iv=interval, sess=self):
+                    while not se.is_set():
+                        se.wait(iv)
+                        if se.is_set():
+                            break
+                        try:
+                            sess.run_message(cmd_str, quiet=True)
+                        except Exception:
+                            pass
+                threading.Thread(target=_loop_runner, daemon=True).start()
+                self._console.print(
+                    f"[dim]Loop started: every {interval}s, command: {loop_cmd}  (type /loop off to stop)[/dim]"
+                )
+                continue
+
+            # Phase 7.4 — Skills / slash commands
+            if raw.startswith("/"):
+                parts = raw[1:].split(None, 1)
+                skill_name = parts[0].lower()
+                extra_args = parts[1] if len(parts) > 1 else ""
+
+                from devagent.skills.loader import load_all_skills
+                skills = load_all_skills()
+
+                if skill_name == "help":
+                    self._console.print()
+                    self._console.print("[bold]Available skills:[/bold]")
+                    for sn, sk in skills.items():
+                        self._console.print(f"  [cyan]/{sn}[/cyan]  {sk.description}")
+                    self._console.print()
+                    self._console.print("[bold]Built-in commands:[/bold]")
+                    self._console.print("[dim]  /memory  /tokens  /security  /undo  /diff  /exit[/dim]")
+                    self._console.print("[dim]  /permissions — show permission rules and hooks[/dim]")
+                    self._console.print("[dim]  /status  — session summary (model, budget, undo stack)[/dim]")
+                    self._console.print("[dim]  /context — token breakdown[/dim]")
+                    self._console.print("[dim]  /clear   — reset conversation (keeps project memory)[/dim]")
+                    self._console.print("[dim]  /rewind N — remove last N turns from history[/dim]")
+                    self._console.print("[dim]  /autocompact [off] — toggle dynamic context compression[/dim]")
+                    self._console.print("[dim]  /goal <condition> — loop until goal is met[/dim]")
+                    self._console.print("[dim]  /btw <question> — side question (not saved to history)[/dim]")
+                    self._console.print("[bold]Background agents (Phase 14):[/bold]")
+                    self._console.print("[dim]  /fork <task> — run task in background thread[/dim]")
+                    self._console.print("[dim]  /tasks       — list background tasks[/dim]")
+                    self._console.print("[dim]  /loop [Ns|Nm] <cmd> — run command on schedule (/loop off to stop)[/dim]")
+                    self._console.print("[bold]Other:[/bold]")
+                    self._console.print("[dim]  /effort low|medium|high|xhigh|max  — change effort level[/dim]")
+                    self._console.print("[dim]  /think on|off  — toggle extended thinking (Anthropic)[/dim]")
+                    self._console.print("[dim]  !<command>  — run a shell command in the project root[/dim]")
+                    continue
+
+                if skill_name in skills:
+                    skill = skills[skill_name]
+                    skill_msg = skill.prompt
+                    if extra_args:
+                        skill_msg += f"\n\nTarget / context: {extra_args}"
+
+                    # Restrict tools if skill specifies
+                    if skill.tools_only:
+                        orig_get_defs = self._loop.registry.get_definitions
+                        restricted = self._loop.registry.get_restricted_definitions(skill.tools_only)
+                        self._loop.registry.get_definitions = lambda _r=restricted: _r  # type: ignore[method-assign]
+
+                    self._console.print(f"[dim]Running skill: /{skill_name}[/dim]")
+                    self.run_message(skill_msg)
+
+                    # Restore unrestricted tools
+                    if skill.tools_only:
+                        self._loop.registry.get_definitions = orig_get_defs  # type: ignore[method-assign]
+                    continue
+
+                self._console.print(f"[yellow]Unknown command: /{skill_name}[/yellow]")
+                self._console.print(
+                    "[dim]Type /help to see available skills.[/dim]"
+                )
+                continue
+
+            if not self._title_set:
+                self._mgr.set_title(self.session_id, raw[:60])
+                self._title_set = True
+
+            self.run_message(raw)
+
+    def print_header(self, title: str = "DevAgent") -> None:
+        graph = "active" if self._cp_active else "not indexed"
+        gh = "active" if self._gh_active else "no token"
+        router = "active" if self._router_active else "off"
+        mode = "local (offline)" if self._cfg.llm.provider == "ollama" else f"cloud ({self._cfg.llm.provider})"
+        effort = self._cfg.llm.effort
+        think_suffix = " + thinking" if self._cfg.llm.extended_thinking else ""
+        bare_suffix = "  [dim][bare][/dim]" if self._bare else ""
+        self._console.print(
+            Panel(
+                f"[bold cyan]{title}[/bold cyan]  |  "
+                f"{self._cfg.llm.provider}/{self._cfg.llm.model}  |  mode: {mode}"
+                f"  |  effort: {effort}{think_suffix}{bare_suffix}\n"
+                f"[dim]Project: {self._project_root}[/dim]\n"
+                f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
+                "[dim]Skills: /explain  /test  /review  /commit  /summarize  /deep-research  /help[/dim]\n"
+                "[dim]Session: /status  /context  /clear  /rewind N  /permissions  /goal  /btw  /autocompact[/dim]\n"
+                "[dim]Agents:  /fork <task>  /tasks  /loop [Ns] <cmd>  /loop off[/dim]\n"
+                "[dim]Other:   /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd>[/dim]",
+                border_style="cyan",
+            )
+        )
+
+    def _print_exit(self) -> None:
+        from devagent.agent import permissions as perm_registry
+        perm_registry.unregister(self.session_id)
+        if self._hook_runner and self._hook_runner.hooks:
+            try:
+                self._hook_runner.session_end(self.session_id)
+            except Exception:
+                pass
+        self._console.print(f"[dim]{self._budget.status_line()}[/dim]")
+        if self.security_log:
+            from devagent.tools.security_gate import format_security_report
+            self._console.print(
+                Panel(
+                    format_security_report(self.security_log),
+                    title="Security Gate Report",
+                    border_style="yellow",
+                )
+            )
+
+
+# ---------------------------------------------------------------------------
+# Pre-fetch helpers (direct httpx, before the agent starts)
+# ---------------------------------------------------------------------------
+
+def _require_gh_token(cfg) -> str:
+    token = cfg.github.token
+    if not token:
+        raise RuntimeError(
+            "GitHub token not configured. Run: devagent init"
+        )
+    return token
+
+
+def _slug(text: str, max_len: int = 40) -> str:
+    """Convert text to a branch-name-safe slug."""
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:max_len].rstrip("-")
+
+
+# ---------------------------------------------------------------------------
+# implement flow
+# ---------------------------------------------------------------------------
+
+_IMPLEMENT_SYSTEM = """\
+## Flow: Implement GitHub Issue
+
+You are implementing a specific GitHub issue end-to-end. Follow this workflow:
+
+1. **Understand**: Read the issue. Use cp_get_file_map and cp_search_symbol to find relevant code.
+2. **Branch**: Create a feature branch with git_branch_create (name: feat/issue-{number}-{slug}).
+3. **Implement**: Edit the relevant files. Prefer edit_file over write_file for targeted changes.
+4. **Test**: Run the test suite with run_shell after each significant change.
+5. **Commit**: `run_shell("git add -A && git commit -m 'feat: <description>'")`
+6. **Push**: `run_shell("git push -u origin feat/issue-{number}-{slug}")`
+7. **PR**: Call gh_create_pr with body including "Closes #{number}" to link the issue.
+
+Be explicit about every file you change and why. If tests fail, fix them before creating the PR.
+"""
+
+
+def run_implement(cfg, project_root: Path, issue_url: str, max_tokens: int | None = None, plan_mode: bool = False, no_limit: bool = False) -> None:
+    """Fetch a GitHub issue and run the implement flow."""
+    console = Console()
+    token = _require_gh_token(cfg)
+
+    parsed = _parse_issue_or_pr_url(issue_url)
+    if parsed.kind == "pull":
+        raise ValueError("URL points to a PR, not an issue. Use 'devagent review' for PR review.")
+
+    from devagent.tools.github_tools import GitHubAPI
+    gh = GitHubAPI(token)
+
+    repo_str = f"{parsed.owner}/{parsed.repo}"
+
+    with console.status(f"[cyan]Fetching issue #{parsed.number} from {repo_str}...[/cyan]"):
+        try:
+            issue = gh.get(f"/repos/{parsed.owner}/{parsed.repo}/issues/{parsed.number}")
+        except Exception as exc:
+            raise RuntimeError(f"Could not fetch issue: {exc}") from exc
+
+    title = issue.get("title", "(no title)")
+    body = issue.get("body") or "(no body)"
+    labels = ", ".join(l["name"] for l in issue.get("labels", []))
+    branch_name = f"feat/issue-{parsed.number}-{_slug(title)}"
+    extra_system = _IMPLEMENT_SYSTEM.replace("{number}", str(parsed.number)).replace("{slug}", _slug(title))
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]#{parsed.number}: {title}[/bold]\n"
+            f"[dim]Labels: {labels or 'none'}  |  Repo: {repo_str}[/dim]\n"
+            f"[dim]Suggested branch: {branch_name}[/dim]",
+            title="Implementing GitHub Issue",
+            border_style="green",
+        )
+    )
+
+    first_message = (
+        f"Implement GitHub issue #{parsed.number} in {repo_str}.\n\n"
+        f"**Title:** {title}\n\n"
+        f"**Body:**\n{body}\n\n"
+        f"Suggested branch name: `{branch_name}`\n"
+        "Start by exploring the codebase structure, then proceed with the implementation."
+    )
+
+    session = DevAgentSession(
+        cfg,
+        project_root,
+        max_tokens=max_tokens,
+        extra_system=extra_system,
+        plan_mode=plan_mode,
+        no_limit=no_limit,
+    )
+    session._mgr.set_title(session.session_id, f"impl: #{parsed.number} {title[:40]}")
+    session._title_set = True
+    session.print_header(f"Implement: #{parsed.number} — {title[:50]}")
+    session.interactive_repl(first_message=first_message)
+
+
+# ---------------------------------------------------------------------------
+# review flow
+# ---------------------------------------------------------------------------
+
+_REVIEW_SYSTEM = """\
+## Flow: Review Pull Request
+
+You are reviewing a GitHub pull request. Your goal is to provide high-quality, actionable feedback.
+
+Workflow:
+1. Read the PR diff (provided in your first message)
+2. For each changed file, use cp_get_impact to understand the blast radius of the change
+3. Check for: bugs, missing error handling, security issues, naming/style problems, missing tests
+4. Use gh_review_pr to post your review with precise inline comments (file + line + specific issue)
+5. Set event=APPROVE if the code is solid, REQUEST_CHANGES if it needs work, COMMENT for observations
+
+Be constructive and specific. Quote the relevant code in your inline comments. Suggest concrete fixes.
+"""
+
+
+def run_review(cfg, project_root: Path, pr_url: str, max_tokens: int | None = None) -> None:
+    """Fetch a PR diff and run the code-review flow."""
+    console = Console()
+    token = _require_gh_token(cfg)
+
+    parsed = _parse_issue_or_pr_url(pr_url)
+    repo_str = f"{parsed.owner}/{parsed.repo}"
+
+    from devagent.tools.github_tools import GitHubAPI
+    gh = GitHubAPI(token)
+
+    with console.status(f"[cyan]Fetching PR #{parsed.number} from {repo_str}...[/cyan]"):
+        try:
+            pr = gh.get(f"/repos/{parsed.owner}/{parsed.repo}/pulls/{parsed.number}")
+            files = gh.get(f"/repos/{parsed.owner}/{parsed.repo}/pulls/{parsed.number}/files")
+        except Exception as exc:
+            raise RuntimeError(f"Could not fetch PR: {exc}") from exc
+
+    title = pr.get("title", "(no title)")
+    pr_body = pr.get("body") or "(no description)"
+    head_sha = pr["head"]["sha"]
+    base_branch = pr["base"]["ref"]
+    head_branch = pr["head"]["ref"]
+
+    # Build a compact diff summary for the first message
+    diff_lines: list[str] = []
+    total_add = total_del = 0
+    for f in files[:30]:
+        total_add += f.get("additions", 0)
+        total_del += f.get("deletions", 0)
+        diff_lines.append(
+            f"[{f['status'].upper()}] {f['filename']}  "
+            f"+{f.get('additions',0)} -{f.get('deletions',0)}"
+        )
+        patch = f.get("patch", "")
+        if patch:
+            patch_head = "\n".join(patch.splitlines()[:30])
+            diff_lines.append(patch_head)
+        diff_lines.append("")
+    if len(files) > 30:
+        diff_lines.append(f"... and {len(files) - 30} more files")
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]PR #{parsed.number}: {title}[/bold]\n"
+            f"[dim]{head_branch} → {base_branch}  |  "
+            f"+{total_add} -{total_del}  |  {len(files)} files[/dim]",
+            title="Reviewing Pull Request",
+            border_style="blue",
+        )
+    )
+
+    first_message = (
+        f"Review PR #{parsed.number} in {repo_str}.\n\n"
+        f"**Title:** {title}\n"
+        f"**Branch:** {head_branch} → {base_branch}\n"
+        f"**Head SHA:** {head_sha}\n\n"
+        f"**PR Description:**\n{pr_body}\n\n"
+        f"**Diff ({len(files)} files, +{total_add} -{total_del}):**\n"
+        + "\n".join(diff_lines)
+        + "\n\nUse cp_get_impact to assess the blast radius of each change, then submit your review."
+    )
+
+    session = DevAgentSession(
+        cfg,
+        project_root,
+        max_tokens=max_tokens,
+        extra_system=_REVIEW_SYSTEM,
+    )
+    session._mgr.set_title(session.session_id, f"review: PR #{parsed.number} {title[:40]}")
+    session._title_set = True
+    session.print_header(f"Review: PR #{parsed.number} — {title[:50]}")
+    session.interactive_repl(first_message=first_message)
+
+
+# ---------------------------------------------------------------------------
+# triage flow
+# ---------------------------------------------------------------------------
+
+_TRIAGE_SYSTEM = """\
+## Flow: Triage Open Issues
+
+You are triaging a repository's open issues. For EVERY issue:
+
+1. Read the issue title and body carefully
+2. Classify the effort: **trivial** (<1h) | **small** (1-4h) | **medium** (1-2d) | **large** (>2d) | **unclear** (needs more info)
+3. Suggest appropriate labels (e.g. bug, enhancement, documentation, good-first-issue, help-wanted)
+4. Use gh_comment_issue to post a triage comment with:
+   - Effort estimate and rationale
+   - Suggested labels
+   - Clarifying questions if needed (for "unclear" issues)
+5. Move to the next issue
+
+Work systematically. Post one comment per issue. Do not skip issues.
+"""
+
+
+def run_triage(cfg, project_root: Path, repo: str, max_tokens: int | None = None) -> None:
+    """Fetch open issues and run the triage flow."""
+    console = Console()
+    token = _require_gh_token(cfg)
+
+    owner, repo_name = _parse_repo(repo)
+    repo_str = f"{owner}/{repo_name}"
+
+    from devagent.tools.github_tools import GitHubAPI
+    gh = GitHubAPI(token)
+
+    with console.status(f"[cyan]Fetching open issues for {repo_str}...[/cyan]"):
+        try:
+            issues = gh.get(f"/repos/{owner}/{repo_name}/issues", state="open", per_page=50)
+        except Exception as exc:
+            raise RuntimeError(f"Could not fetch issues: {exc}") from exc
+
+    issues = [i for i in issues if "pull_request" not in i]
+    if not issues:
+        console.print(f"[yellow]No open issues found for {repo_str}.[/yellow]")
+        return
+
+    issue_list = "\n".join(
+        f"  #{i['number']}  {i['title']}  "
+        f"[{', '.join(l['name'] for l in i.get('labels', [])) or 'no labels'}]"
+        for i in issues
+    )
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]{len(issues)} open issues in {repo_str}[/bold]",
+            title="Triaging Issues",
+            border_style="magenta",
+        )
+    )
+
+    first_message = (
+        f"Triage the following {len(issues)} open issues in {repo_str}.\n\n"
+        f"{issue_list}\n\n"
+        f"For each issue above, use gh_get_issue to read the full body, "
+        f"then post a triage comment with your effort estimate and label suggestions."
+    )
+
+    session = DevAgentSession(
+        cfg,
+        project_root,
+        max_tokens=max_tokens,
+        extra_system=_TRIAGE_SYSTEM,
+    )
+    session._mgr.set_title(session.session_id, f"triage: {repo_str} ({len(issues)} issues)")
+    session._title_set = True
+    session.print_header(f"Triage: {repo_str}")
+    session.interactive_repl(first_message=first_message)
+
+
+# ---------------------------------------------------------------------------
+# fix-ci flow
+# ---------------------------------------------------------------------------
+
+_FIX_CI_SYSTEM = """\
+## Flow: Fix CI Failure
+
+You are fixing a GitHub Actions CI failure. Workflow:
+
+1. The failure logs are in your first message — identify the root cause
+2. Use grep and cp_search_symbol to locate the failing code
+3. Read the relevant files to understand the context
+4. Make targeted, minimal fixes
+5. Verify by running the specific failing test locally: run_shell("pytest path/to/test -x -v")
+6. Once fixed, commit and push the fix
+7. Optionally comment on the failed run's PR if there is one
+
+Focus on the specific error. Avoid sweeping refactors unless the root cause requires it.
+"""
+
+
+def run_fix_ci(cfg, project_root: Path, run_url: str, max_tokens: int | None = None) -> None:
+    """Fetch a failed CI run's logs and run the fix-ci flow."""
+    console = Console()
+    token = _require_gh_token(cfg)
+
+    parsed_run = _parse_run_url(run_url)
+    repo_str = f"{parsed_run.owner}/{parsed_run.repo}"
+
+    import httpx as _httpx
+
+    from devagent.tools.github_tools import GitHubAPI
+
+    gh = GitHubAPI(token)
+
+    with console.status(f"[cyan]Fetching run {parsed_run.run_id} from {repo_str}...[/cyan]"):
+        try:
+            run_info = gh.get(f"/repos/{parsed_run.owner}/{parsed_run.repo}/actions/runs/{parsed_run.run_id}")
+            jobs_data = gh.get(f"/repos/{parsed_run.owner}/{parsed_run.repo}/actions/runs/{parsed_run.run_id}/jobs")
+        except Exception as exc:
+            raise RuntimeError(f"Could not fetch run: {exc}") from exc
+
+    all_jobs = jobs_data.get("jobs", [])
+    failed_jobs = [j for j in all_jobs if j.get("conclusion") in ("failure", "timed_out")]
+    if not failed_jobs:
+        failed_jobs = [j for j in all_jobs if j.get("conclusion") not in ("success", "skipped", None)]
+
+    run_name = run_info.get("display_title") or run_info.get("name", f"Run #{parsed_run.run_id}")
+    conclusion = run_info.get("conclusion", "unknown")
+    branch = run_info.get("head_branch", "")
+    commit_sha = run_info.get("head_sha", "")[:7]
+
+    log_sections: list[str] = []
+    for job in failed_jobs[:3]:
+        job_id = job["id"]
+        bad_steps = [s["name"] for s in job.get("steps", []) if s.get("conclusion") in ("failure", "timed_out")]
+        log_sections.append(f"Job: {job.get('name', '?')} — failed steps: {', '.join(bad_steps) or 'none'}")
+        try:
+            r = _httpx.get(
+                f"https://api.github.com/repos/{parsed_run.owner}/{parsed_run.repo}/actions/jobs/{job_id}/logs",
+                headers=gh._headers,
+                follow_redirects=True,
+                timeout=60,
+            )
+            if r.status_code == 200:
+                tail = r.text.splitlines()[-120:]
+                log_sections.append("\n".join(tail))
+        except Exception:
+            log_sections.append("(could not fetch log)")
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]Run: {run_name}[/bold]\n"
+            f"[dim]Conclusion: {conclusion}  |  Branch: {branch}  |  Commit: {commit_sha}[/dim]\n"
+            f"[dim]Failed jobs: {len(failed_jobs)}[/dim]",
+            title="Fix CI Failure",
+            border_style="red",
+        )
+    )
+
+    first_message = (
+        f"Fix the CI failure in run {parsed_run.run_id} of {repo_str}.\n\n"
+        f"**Run:** {run_name}\n"
+        f"**Branch:** {branch}  |  **Commit:** {commit_sha}\n\n"
+        f"**Failed job logs:**\n"
+        + "\n\n---\n\n".join(log_sections)
+        + "\n\nIdentify the root cause, locate the failing code, and implement a fix."
+    )
+
+    session = DevAgentSession(
+        cfg,
+        project_root,
+        max_tokens=max_tokens,
+        extra_system=_FIX_CI_SYSTEM,
+    )
+    session._mgr.set_title(session.session_id, f"fix-ci: run {parsed_run.run_id} ({repo_str})")
+    session._title_set = True
+    session.print_header(f"Fix CI: {run_name[:50]}")
+    session.interactive_repl(first_message=first_message)

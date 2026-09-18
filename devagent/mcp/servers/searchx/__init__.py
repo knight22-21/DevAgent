@@ -1,0 +1,1 @@
+"""SearchX MCP server."""
