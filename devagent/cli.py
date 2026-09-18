@@ -2334,7 +2334,7 @@ app.add_typer(bench_app, name="bench")
 def bench_native(
     category: str | None = typer.Option(None, "--category", "-c", help="Filter by category"),
     difficulty: str | None = typer.Option(None, "--difficulty", "-d", help="easy | medium | hard"),
-    task_id: str | None = typer.Option(None, "--task-id", "-t", help="Run a single task by exact ID"),
+    task_id: list[str] | None = typer.Option(None, "--task-id", "-t", help="Run specific task(s) by ID (repeatable: -t id1 -t id2)"),  # noqa: B008
     live: bool = typer.Option(False, "--live/--dry", help="Use real LLM (--live) or dry-run (--dry)"),
     provider: str | None = typer.Option(None, "--provider", "-p", help="Override LLM provider (ollama, anthropic, openai)"),
     model: str | None = typer.Option(None, "--model", "-m", help="Override LLM model for live runs"),
@@ -2350,7 +2350,8 @@ def bench_native(
 
     tasks = BenchRunner.load_tasks(category=category, difficulty=difficulty)
     if task_id:
-        tasks = [t for t in tasks if t.id == task_id]
+        id_set = set(task_id)
+        tasks = [t for t in tasks if t.id in id_set]
     if limit:
         tasks = tasks[:limit]
 

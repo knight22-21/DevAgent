@@ -100,7 +100,7 @@
     "oracle_pass_exit_code": 0,
     "expected_files_touched": [],
     "max_iterations": 8,
-    "timeout_sec": 60,
+    "timeout_sec": 120,
     "tags": ["code_review", "no_write", "security"]
   },
   {
@@ -159,7 +159,7 @@
     "id": "refactor-002",
     "category": "refactor",
     "difficulty": "medium",
-    "description": "The multiply() bug in math_utils.py is fixed. Now add type hints to all public functions in src/math_utils.py and src/string_utils.py. Run mypy or ruff check to verify. All tests must still pass.",
+    "description": "Add type hints to all public functions in src/math_utils.py and src/string_utils.py. Run pytest tests/ -q first to understand the current state, fix any failures you find, then add the type hints. All tests must pass when you are done.",
     "fixture_project": "sample_project",
     "oracle_check": "python -m pytest tests/ -q --tb=short",
     "oracle_pass_exit_code": 0,
@@ -211,13 +211,13 @@
     "id": "test-write-002",
     "category": "test_write",
     "difficulty": "medium",
-    "description": "Write a comprehensive test file tests/test_string_utils_full.py that tests every public function in src/string_utils.py, including edge cases (empty strings, unicode). All tests must pass.",
+    "description": "Read src/string_utils.py to understand every public function's exact signature. Before writing any assertion, run each function with your chosen inputs using a Python shell command (e.g. `python -c \"import sys; sys.path.insert(0,'src'); from string_utils import reverse; print(reverse('hello'))\"`) to get the real output — do not compute expected values in your head. Write tests/test_string_utils_full.py using only expected values you have verified by running the code. Use the same import pattern as existing tests: add `import sys, pathlib; sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))` at the top, then `from src.string_utils import ...`. Do NOT modify any file in src/. All tests must pass.",
     "fixture_project": "sample_project",
     "oracle_check": "python -m pytest tests/test_string_utils_full.py -q --tb=short",
     "oracle_pass_exit_code": 0,
     "expected_files_touched": ["tests/test_string_utils_full.py"],
     "max_iterations": 15,
-    "timeout_sec": 150,
+    "timeout_sec": 300,
     "tags": ["python", "test_write", "comprehensive"]
   },
   {
