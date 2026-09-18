@@ -2417,10 +2417,10 @@ def bench_canary(
         total_checks += 1
         try:
             exec(check["check"])  # noqa: S102
-            console.print(f"  [green]✓[/green] {check['id']}: {check['description']}")
+            console.print(f"  [green]PASS[/green] {check['id']}: {check['description']}")
             passed_checks += 1
         except Exception as exc:
-            console.print(f"  [red]✗[/red] {check['id']}: {exc}")
+            console.print(f"  [red]FAIL[/red] {check['id']}: {exc}")
             failures.append(check["id"])
 
     # 2. Legacy benchmark scripts (mock-LLM, no real agent needed)
@@ -2442,11 +2442,11 @@ def bench_canary(
                 cwd=str(bench_dir),
             )
             if result.returncode == 0:
-                console.print(f"  [green]✓[/green] {script_rel}")
+                console.print(f"  [green]PASS[/green] {script_rel}")
                 passed_checks += 1
             else:
                 short = (result.stdout + result.stderr).strip()[:200]
-                console.print(f"  [red]✗[/red] {script_rel}\n    {short}")
+                console.print(f"  [red]FAIL[/red] {script_rel}\n    {short}")
                 failures.append(script_rel)
 
     # Summary
@@ -2502,7 +2502,7 @@ def bench_canary(
         console.print(f"[red]Canary FAILED — {len(failures)} check(s) failed: {failures}[/red]")
         raise typer.Exit(1)
 
-    console.print("[green]Canary PASSED ✓[/green]")
+    console.print("[green]Canary PASSED[/green]")
 
 
 @bench_app.command("sweep")
