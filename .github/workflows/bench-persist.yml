@@ -66,3 +66,12 @@ jobs:
           git commit -m "ci: bench results $(date -u +%Y%m%d_%H%M%S) [skip ci]" \
             || echo "Nothing to commit"
           git push origin bench-results
+
+      - name: Update LEADERBOARD.md on main
+        run: |
+          git checkout main
+          devagent bench leaderboard --remote --output LEADERBOARD.md
+          git add LEADERBOARD.md
+          git diff --cached --quiet \
+            || git commit -m "chore: update leaderboard [skip ci]"
+          git push origin main

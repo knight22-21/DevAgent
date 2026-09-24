@@ -2379,7 +2379,7 @@ def bench_native(
 
     # Always persist — results are saved after every task (partial) and again
     # as a timestamped final file so nothing is lost on crash or mid-run stop.
-    path = BenchReport.save_json(results, label="native")
+    path = BenchReport.save_json(results, label="native", model=model, provider=provider)
     console.print(f"\n[dim]Results saved -> {path}[/dim]")
 
     # Partial file is now redundant — clean it up.
@@ -2628,6 +2628,65 @@ def bench_history(
         console.print(f"[dim]Loaded {len(filenames)} remote result file(s) from bench-results[/dim]")
 
     BenchReport.render_history(limit=limit if limit > 0 else None, src_dir=src_dir)
+
+
+@bench_app.command("leaderboard")
+def bench_leaderboard(
+    remote: bool = typer.Option(False, "--remote", help="Fetch results from the bench-results git branch"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Write markdown leaderboard to this file"),
+) -> None:
+    """Show a leaderboard grouped by model — best and latest score per model.
+
+    Use --output LEADERBOARD.md to write a markdown file (used by CI to keep
+    the repo leaderboard up to date after every push to main).
+    """
+    import re
+    import tempfile
+
+    from devagent.bench.report import BenchReport
+
+    src_dir = None
+    if remote:
+        fetch_result = subprocess.run(
+            ["git", "fetch", "origin", "bench-results"],
+            capture_output=True,
+            text=True,
+        )
+        if fetch_result.returncode != 0:
+            console.print("[yellow]bench-results branch not found on origin — no remote results yet.[/yellow]")
+            return
+
+        ls_result = subprocess.run(
+            ["git", "ls-tree", "--name-only", "origin/bench-results"],
+            capture_output=True,
+            text=True,
+        )
+        filenames = [
+            f.strip()
+            for f in ls_result.stdout.splitlines()
+            if re.match(r"^native_\d{8}_\d{6}\.json$", f.strip())
+        ]
+        if filenames:
+            tmp_dir = tempfile.mkdtemp(prefix="devagent_leaderboard_")
+            src_dir = Path(tmp_dir)
+            for fname in filenames:
+                show = subprocess.run(
+                    ["git", "show", f"origin/bench-results:{fname}"],
+                    capture_output=True,
+                    text=True,
+                )
+                if show.returncode == 0:
+                    (src_dir / fname).write_text(show.stdout, encoding="utf-8")
+            console.print(f"[dim]Loaded {len(filenames)} remote result file(s) from bench-results[/dim]")
+
+    if output:
+        import datetime
+        date = datetime.datetime.now(tz=datetime.UTC).strftime("%Y-%m-%d")
+        md = BenchReport.generate_leaderboard_md(src_dir=src_dir, date=date)
+        Path(output).write_text(md, encoding="utf-8")
+        console.print(f"[green]Leaderboard written to {output}[/green]")
+    else:
+        BenchReport.render_leaderboard(src_dir=src_dir)
 
 
 # ---------------------------------------------------------------------------
