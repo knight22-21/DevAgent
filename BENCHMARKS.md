@@ -1,12 +1,14 @@
 # DevAgent Benchmarks
 
-DevAgent ships with a built-in task benchmark that measures agent performance on 20 real coding tasks. Each task runs the full agent loop against a fixture Python project and passes only if the oracle (a `pytest` run or a `python -c` assertion) exits 0.
+DevAgent ships with a built-in task benchmark that measures agent performance on 24 real coding tasks across Python, JavaScript, and Go. Each task runs the full agent loop against a fixture project and passes only if the oracle (a test runner or assertion command) exits 0.
 
 ---
 
 ## Task set
 
-20 tasks across 6 categories, covering what a real agent session looks like day-to-day:
+24 tasks across 8 categories and 3 languages:
+
+### Python (20 tasks) — fixture: `sample_project`
 
 | Category | Tasks | What it tests |
 |---|---|---|
@@ -19,13 +21,64 @@ DevAgent ships with a built-in task benchmark that measures agent performance on
 | `onboarding` | 1 | Explore an unfamiliar codebase and write a developer guide |
 | `multi_file` | 2 | Fix or add features across multiple files in one pass |
 
-Difficulty distribution: 7 easy, 8 medium, 5 hard.
+### JavaScript (2 tasks) — fixture: `js_project`, oracle: `node --test`
+
+| Task | What it tests |
+|---|---|
+| `js-bug-fix-001` | Fix deliberate bug in `divide()` (`a + b` instead of `a / b`) |
+| `js-feature-001` | Implement missing `camelCase()` function in strings.js |
+
+### Go (2 tasks) — fixture: `go_project`, oracle: `go test`
+
+| Task | What it tests |
+|---|---|
+| `go-bug-fix-001` | Fix deliberate bug in `Multiply()` (`a + b` instead of `a * b`) |
+| `go-feature-001` | Implement missing `TitleCase()` function in strings.go |
+
+Difficulty distribution (Python): 7 easy, 8 medium, 5 hard.
 
 ---
 
 ## Results
 
-### gpt-oss:20b — Ollama Cloud — September 2026
+### gpt-oss:20b — Ollama Cloud — September 2026 (24-task run, JS + Go added)
+
+**21/24 (87.5%)**
+
+| Task | Language | Category | Result | Time (s) | Iterations | Notes |
+|---|---|---|---|---|---|---|
+| bug-fix-001 | Python | bug_fix | PASS | 39.3 | 9 | |
+| feature-add-001 | Python | feature_add | PASS | 47.7 | 10 | |
+| security-fix-001 | Python | security | PASS | 43.6 | 11 | |
+| bug-fix-002 | Python | bug_fix | PASS | 50.0 | 11 | |
+| refactor-001 | Python | refactor | PASS | 51.2 | 11 | |
+| explain-001 | Python | explain | PASS | 18.9 | 4 | |
+| test-write-001 | Python | test_write | PASS | 44.8 | 10 | |
+| code-review-001 | Python | security | FAIL | 60.0 | 0 | Timeout — model hung on first call |
+| feature-add-002 | Python | feature_add | PASS | 74.2 | 11 | |
+| bug-fix-003 | Python | bug_fix | PASS | 47.1 | 10 | |
+| multi-file-001 | Python | multi_file | PASS | 35.3 | 12 | |
+| security-audit-001 | Python | security | PASS | 36.6 | 15 | |
+| refactor-002 | Python | refactor | FAIL | 48.9 | 15 | Added type hints but broke `multiply()` |
+| feature-add-003 | Python | feature_add | PASS | 81.2 | 12 | |
+| explain-002 | Python | explain | PASS | 15.5 | 7 | |
+| bug-fix-004 | Python | bug_fix | PASS | 39.3 | 11 | |
+| test-write-002 | Python | test_write | FAIL | 72.6 | 11 | Called `truncate("")` missing required arg |
+| refactor-003 | Python | refactor | PASS | 53.9 | 11 | |
+| multi-file-002 | Python | multi_file | PASS | 47.8 | 10 | |
+| onboarding-001 | Python | onboarding | PASS | 22.0 | 10 | |
+| js-bug-fix-001 | JavaScript | bug_fix | PASS | 13.2 | 6 | |
+| js-feature-001 | JavaScript | feature_add | PASS | 12.3 | 6 | |
+| go-bug-fix-001 | Go | bug_fix | PASS | 16.0 | 5 | |
+| go-feature-001 | Go | feature_add | PASS | 21.7 | 7 | |
+
+**By language:** Python 17/20 (85%) · JavaScript 2/2 (100%) · Go 2/2 (100%)
+
+Average time per task: **43.9s** — Average iterations: **9.5**
+
+---
+
+### gpt-oss:20b — Ollama Cloud — September 2026 (original 20-task Python-only run)
 
 **20/20 (100%)**
 
@@ -89,10 +142,13 @@ Primary failure modes: **5 timeouts** (model hung waiting for Ollama on complex 
 
 ## Summary comparison
 
-| Model | Provider | Pass Rate | Avg time/task | Notes |
-|---|---|---|---|---|
-| llama3.2:3b | Ollama local | 9/20 (45%) | ~45s | Frequent timeouts on medium/hard tasks |
-| **gpt-oss:20b** | **Ollama Cloud** | **20/20 (100%)** | **36.9s** | No timeouts; solid tool-call compliance |
+| Model | Provider | Tasks | Pass Rate | Avg time/task | Notes |
+|---|---|---|---|---|---|
+| llama3.2:3b | Ollama local | 20 | 9/20 (45%) | ~45s | Frequent timeouts on medium/hard tasks |
+| **gpt-oss:20b** | **Ollama Cloud** | **20** | **20/20 (100%)** | **36.9s** | Python-only baseline |
+| **gpt-oss:20b** | **Ollama Cloud** | **24** | **21/24 (87.5%)** | **43.9s** | Full suite incl. JS + Go |
+
+JS and Go tasks completed faster (avg 16s) and more efficiently (avg 6 iterations) than Python tasks — the agent needs fewer iterations on simpler single-file fixes in those languages.
 
 ---
 
@@ -138,12 +194,13 @@ devagent bench native --live --model gpt-oss:20b --provider ollama
 devagent bench native --live --model claude-sonnet-4-6 --provider anthropic
 ```
 
-**Filter by category or difficulty:**
+**Filter by category, difficulty, or language:**
 
 ```bash
 devagent bench native --live --category bug_fix
 devagent bench native --live --difficulty easy
-devagent bench native --live -t feature-add-003   # single task by ID
+devagent bench native --live -t js-bug-fix-001   # single task by ID
+devagent bench native --live -t go-feature-001
 ```
 
 Results are always saved to `benchmarks/results/<timestamp>.json`. A rolling `native_partial.json` is written after each task so a crash mid-run doesn't lose completed results.
@@ -152,8 +209,9 @@ Results are always saved to `benchmarks/results/<timestamp>.json`. A rolling `na
 
 ## Stored results
 
-| File | Model | Pass rate | Date |
-|---|---|---|---|
-| `benchmarks/results/llama32_3b_baseline.json` | llama3.2:3b (local) | 9/20 (45%) | Sep 2026 |
-| `benchmarks/results/native_20260907_074033.json` | gpt-oss:20b (cloud) | 20/20 (100%) | Sep 2026 |
-| `benchmarks/results/sweep_20260907_171806.json` | B4 sweep: gpt-oss:20b vs glm-5.3-flash | 5/5 vs 2/5 | Sep 2026 |
+| File | Model | Tasks | Pass rate | Date |
+|---|---|---|---|---|
+| `benchmarks/results/llama32_3b_baseline.json` | llama3.2:3b (local) | 20 | 9/20 (45%) | Sep 2026 |
+| `benchmarks/results/native_20260907_074033.json` | gpt-oss:20b (cloud) | 20 | 20/20 (100%) | Sep 2026 |
+| `benchmarks/results/native_20260918_123726.json` | gpt-oss:20b (cloud) | 24 | 21/24 (87.5%) | Sep 2026 |
+| `benchmarks/results/sweep_20260907_171806.json` | B4 sweep: gpt-oss:20b vs glm-5.3-flash | 5 | 5/5 vs 2/5 | Sep 2026 |
