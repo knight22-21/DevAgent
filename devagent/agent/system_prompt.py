@@ -14,12 +14,40 @@ _DEVAGENT_MD = "DEVAGENT.md"
 
 
 def load_devagent_md(project_root: str | Path) -> str:
-    """Read DEVAGENT.md from the project root. Returns '' if the file doesn't exist."""
-    path = Path(project_root) / _DEVAGENT_MD
+    """Read DEVAGENT.md from project_root and any ancestor directories.
+
+    Ancestor files are concatenated most-general-first (outermost ancestor →
+    project root), so project-level instructions appear last and take
+    precedence. Returns '' if no DEVAGENT.md exists anywhere in the chain.
+    """
+    root = Path(project_root).resolve()
+
+    # Walk upward from root's parent, collecting DEVAGENT.md text for each dir
+    ancestor_texts: list[str] = []
+    current = root.parent
+    while True:
+        try:
+            text = (current / _DEVAGENT_MD).read_text(encoding="utf-8").strip()
+            if text:
+                ancestor_texts.append(text)
+        except (FileNotFoundError, OSError):
+            pass
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    # Project-root file is the most specific — always last
+    project_text = ""
     try:
-        return path.read_text(encoding="utf-8").strip()
+        project_text = (root / _DEVAGENT_MD).read_text(encoding="utf-8").strip()
     except (FileNotFoundError, OSError):
-        return ""
+        pass
+
+    # Reverse ancestor list so outermost (most general) comes first
+    ancestor_texts.reverse()
+    all_parts = ancestor_texts + ([project_text] if project_text else [])
+    return "\n\n---\n\n".join(all_parts)
 
 
 _BASE = """\
