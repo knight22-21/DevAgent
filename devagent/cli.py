@@ -3102,5 +3102,65 @@ def list_tasks() -> None:
             console.print(f"    [dim]{t.result[:120]}[/dim]")
 
 
+# ---------------------------------------------------------------------------
+# Phase 26 — plugin bundle commands
+# ---------------------------------------------------------------------------
+
+plugins_app = typer.Typer(name="plugins", help="Manage DevAgent plugin bundles.")
+app.add_typer(plugins_app, name="plugins")
+
+
+@plugins_app.command("list")
+def plugins_list() -> None:
+    """List all installed DevAgent plugin bundles."""
+    from devagent.plugins import load_plugins
+
+    bundles = load_plugins()
+    if not bundles:
+        console.print("[dim]No plugin bundles installed.[/dim]")
+        console.print("[dim]Install one with: devagent plugins install <package>[/dim]")
+        return
+
+    table = Table(title="Installed DevAgent Plugins", show_lines=False)
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Version", style="green")
+    table.add_column("Description")
+    table.add_column("Skills", justify="right")
+    table.add_column("Hooks", justify="right")
+    table.add_column("MCP Servers", justify="right")
+    table.add_column("Tools", justify="right")
+
+    for b in bundles:
+        table.add_row(
+            b.name,
+            b.version,
+            b.description or "—",
+            str(len(b.skills)),
+            str(len(b.hooks)),
+            str(len(b.mcp_servers)),
+            str(len(b.tools)),
+        )
+
+    console.print(table)
+
+
+@plugins_app.command("install")
+def plugins_install(
+    package: str = typer.Argument(..., help="PyPI package name or local path to install."),
+) -> None:
+    """Install a DevAgent plugin bundle via pip."""
+    from devagent.plugins import install_plugin
+
+    console.print(f"[dim]Installing plugin: {package}[/dim]")
+    success, output = install_plugin(package)
+    if output:
+        console.print(output)
+    if success:
+        console.print(f"[green]Installed {package}.[/green] Run [bold]devagent plugins list[/bold] to verify.")
+    else:
+        console.print(f"[red]Failed to install {package}.[/red]")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
