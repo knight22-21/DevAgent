@@ -2,7 +2,7 @@
 
 # DevAgent
 
-**An AI coding agent for your terminal. Offline-first, GitHub-native, benchmarked at 20/20 on real coding tasks.**
+**An AI coding agent for your terminal. Offline-first, GitHub-native, benchmarked at 21/24 (87.5%) on real coding tasks.**
 
 [![PyPI version](https://img.shields.io/pypi/v/devagent.svg)](https://pypi.org/project/devagent/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/devagent.svg)](https://pypi.org/project/devagent/)
@@ -191,18 +191,21 @@ DevAgent pairs well with every major AI tool and editor. See **[INTEGRATIONS.md]
 
 ## Benchmarks
 
-DevAgent ships with a 20-task benchmark covering bug fixes, feature adds, refactors, test writing, security audits, and onboarding tasks. Each task runs the full agent loop and passes only if a `pytest` or assertion oracle exits 0.
+DevAgent ships with a 24-task benchmark covering bug fixes, feature adds, refactors, test writing, security audits, and onboarding tasks across Python, JavaScript, and Go fixture projects. Each task runs the full agent loop and passes only if a `pytest` or assertion oracle exits 0.
 
-| Model | Provider | Pass rate |
-|---|---|---|
-| llama3.2:3b | Ollama (local) | 9/20 (45%) |
-| **gpt-oss:20b** | **Ollama Cloud** | **20/20 (100%)** |
+| Rank | Model | Provider | Best Score | Runs |
+|---|---|---|---|---|
+| 1 | **gpt-oss:20b** | **Ollama Cloud** | **21/24 (87.5%)** | 2 |
+| 2 | llama3.2:3b | Ollama (local) | 9/20 (45%) | 1 |
 
-See **[BENCHMARKS.md](BENCHMARKS.md)** for per-task results, failure analysis, and instructions for running the benchmark against any supported model.
+See **[BENCHMARKS.md](BENCHMARKS.md)** for per-task results, failure analysis, and instructions for running the benchmark against any supported model. See **[LEADERBOARD.md](LEADERBOARD.md)** for the auto-updated rankings.
 
 ```bash
 # Run against any model
 devagent bench native --live --model gpt-oss:20b --provider ollama
+
+# View the leaderboard
+devagent bench leaderboard
 ```
 
 ---
@@ -290,7 +293,12 @@ Skills are reusable task templates invoked with `/<skill-name>` inside a REPL se
 | `devagent bench native --live --model <m> --provider <p>` | Live run against a model |
 | `devagent bench native --category <c>` | Filter by category (`bug_fix`, `feature_add`, …) |
 | `devagent bench native --difficulty <d>` | Filter by difficulty (`easy`, `medium`, `hard`) |
-| `devagent bench native -t <task-id>` | Run a single task by ID |
+| `devagent bench native -t <id>` | Run one task by ID (repeatable: `-t id1 -t id2`) |
+| `devagent bench leaderboard` | Show ranked results grouped by (model, provider) |
+| `devagent bench leaderboard --remote` | Fetch latest results from the `bench-results` branch |
+| `devagent bench leaderboard --output <file>` | Write markdown leaderboard to a file |
+| `devagent bench history` | Show per-task pass/fail trend across saved result files |
+| `devagent bench canary` | Run the fast CI canary (no LLM required) |
 
 ### Server
 
