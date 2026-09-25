@@ -500,9 +500,33 @@ class LLMClient:
             result.append(ToolCallRequest(id=str(uuid.uuid4())[:8], name=name, args=args))
         return result
 
-    def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
+    def _ollama_client(self) -> ollama.Client:
+        """Return an ollama.Client configured for local or Ollama Cloud.
+
+        Cloud is detected when api_key is set, or when base_url is not the
+        default localhost address.  Cloud requests use https://ollama.com as
+        the host and pass the key as an Authorization: Bearer header.
+        """
         import ollama
 
+        _LOCAL_DEFAULT = "http://localhost:11434"
+        base_url = self.cfg.base_url or _LOCAL_DEFAULT
+        api_key = self.cfg.api_key or ""
+
+        # Cloud: explicit key always wins; non-default URL is also cloud-like.
+        if api_key:
+            host = base_url if base_url != _LOCAL_DEFAULT else "https://ollama.com"
+            return ollama.Client(
+                host=host,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if base_url != _LOCAL_DEFAULT:
+            return ollama.Client(host=base_url)
+        return ollama.Client()
+
+    def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
+
+        client = self._ollama_client()
         oai_messages = _to_ollama_messages(messages)
         oai_tools = _to_openai_tools(tools) if tools else []
         kwargs: dict[str, Any] = {
@@ -514,7 +538,7 @@ class LLMClient:
             kwargs["tools"] = oai_tools
 
         try:
-            resp = ollama.chat(**kwargs)
+            resp = client.chat(**kwargs)
             msg = resp.message
             raw_tcs = msg.tool_calls or []
             tool_calls = [
@@ -548,7 +572,6 @@ class LLMClient:
             # Fall back to the raw HTTP response and normalise manually.
             if "arguments" not in str(exc) and "validation" not in str(exc).lower():
                 raise
-            client = ollama.Client()
             raw = client._request_raw(
                 "POST", "/api/chat",
                 json={
@@ -588,18 +611,17 @@ class LLMClient:
         messages: list[AgentMessage],
         tools: list[ToolDef] | None = None,
     ) -> AsyncIterator[str]:
-        import ollama
-
+        client = self._ollama_client()
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
-            "messages": _to_openai_messages(messages),
+            "messages": _to_ollama_messages(messages),
             "options": {"temperature": self._effort_temperature()},
             "stream": True,
         }
         if tools:
             kwargs["tools"] = _to_openai_tools(tools)
 
-        for chunk in ollama.chat(**kwargs):
+        for chunk in client.chat(**kwargs):
             text = chunk.message.content
             if text:
                 yield text
