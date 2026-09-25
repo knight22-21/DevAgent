@@ -1,18 +1,13 @@
 # DevAgent Leaderboard
 
-_Last updated: 2026-09-24_
+_Last updated: 2026-09-25_
 
 Scores are from `devagent bench native --live` runs against the full task set.
 Pass = oracle exits 0 after the agent loop. Higher is better.
 
 | Rank | Model | Provider | Best Score | Latest Score | Latest Run | Runs | Avg Time |
 |------|-------|----------|------------|--------------|------------|------|----------|
-| 1 | `gpt-oss:20b` | Ollama Cloud | **21/24 (87%)** | 21/24 (87%) | 2026-09-18 | 2 | 43.9s |
-| 2 | `llama3.2:3b` | Ollama local | **9/20 (45%)** | 9/20 (45%) | 2026-09-07 | 1 | 45.0s |
-
-> This table is auto-updated by CI after every push to main. Pre-existing runs are seeded
-> from documented results in BENCHMARKS.md. New runs using `--model` and `--provider`
-> flags populate the leaderboard automatically.
+| 1 | `unknown` | unknown | **4/24 (17%)** | 4/24 (17%) | 2026-09-25 | 3 | 0.4s |
 
 ---
 
