@@ -2820,6 +2820,7 @@ def agent_run(
     ag = defs[name]
     cfg = load_config(project)
     task_msg = task or ag.prompt or f"Run the {name} agent on the current project."
+    use_worktree = ag.isolation == "worktree"
     if background:
         import threading
         import uuid
@@ -2827,11 +2828,21 @@ def agent_run(
         from devagent.session.task_store import get_store as _get_store
         task_id = uuid.uuid4().hex[:8]
         _get_store().add(task_id, f"{name}: {task_msg[:40]}")
-        def _bg(tid=task_id, t=task_msg, c=cfg, r=project):
+        def _bg(tid=task_id, t=task_msg, c=cfg, r=project, wt=use_worktree):
             try:
                 from devagent.agent.flows import DevAgentSession
-                s = DevAgentSession(c, r, bare=True, permission_mode=ag.permission)
-                result = s.run_message(t, quiet=True)
+                if wt:
+                    from devagent.agent.worktree import WorktreeError, isolated_worktree
+                    try:
+                        with isolated_worktree(r, branch_prefix=name) as (wt_path, _branch):
+                            s = DevAgentSession(c, str(wt_path), bare=True, permission_mode=ag.permission)
+                            result = s.run_message(t, quiet=True)
+                    except WorktreeError as exc:
+                        _get_store().complete(tid, f"[worktree error] {exc}", failed=True)
+                        return
+                else:
+                    s = DevAgentSession(c, r, bare=True, permission_mode=ag.permission)
+                    result = s.run_message(t, quiet=True)
                 _get_store().complete(tid, result or "done")
             except Exception as exc:
                 _get_store().complete(tid, str(exc), failed=True)
@@ -2840,8 +2851,19 @@ def agent_run(
         console.print("Check with: [bold]devagent tasks[/bold]")
     else:
         from devagent.agent.flows import DevAgentSession
-        session = DevAgentSession(cfg, project, permission_mode=ag.permission)
-        session.run_message(task_msg)
+        if use_worktree:
+            from devagent.agent.worktree import WorktreeError, isolated_worktree
+            try:
+                with isolated_worktree(project, branch_prefix=name) as (wt_path, branch):
+                    console.print(f"[dim]Worktree: {wt_path} (branch {branch})[/dim]")
+                    session = DevAgentSession(cfg, str(wt_path), permission_mode=ag.permission)
+                    session.run_message(task_msg)
+            except WorktreeError as exc:
+                console.print(f"[red]Worktree error:[/red] {exc}")
+                raise typer.Exit(1)
+        else:
+            session = DevAgentSession(cfg, project, permission_mode=ag.permission)
+            session.run_message(task_msg)
 
 
 @app.command("tasks")
