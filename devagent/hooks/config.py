@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-HookType = Literal["command", "http"]
+HookType = Literal["command", "http", "prompt"]
 HookEvent = Literal["pre_tool_use", "post_tool_use", "session_start", "session_end", "file_write"]
 
 
@@ -17,6 +17,7 @@ class HookDef:
     type: str
     command: str = ""
     url: str = ""
+    prompt: str = ""      # LLM evaluator prompt template (prompt hook type)
     tool: str = ""        # empty = match all tools
 
     def matches(self, event: str, tool_name: str) -> bool:
@@ -45,6 +46,7 @@ def load_hooks(project_root: str | Path) -> list[HookDef]:
             type=entry.get("type", "command"),
             command=entry.get("command", ""),
             url=entry.get("url", ""),
+            prompt=entry.get("prompt", ""),
             tool=entry.get("tool", ""),
         ))
     return hooks
