@@ -492,6 +492,40 @@ class DevAgentSession:
                     render_diff(self._last_diff)
                 continue
 
+            # Phase 23 — /model: hot-swap provider/model for the rest of the session
+            if cmd.startswith("/model"):
+                parts = raw.split(None, 1)
+                _valid_providers = ("ollama", "anthropic", "openai", "gemini", "groq")
+                if len(parts) < 2:
+                    self._console.print(
+                        f"[dim]Current model: [bold]{self._cfg.llm.provider}/{self._cfg.llm.model}[/bold]\n"
+                        f"Usage: /model <provider/model>  or  /model <model>  (keeps current provider)\n"
+                        f"Providers: {', '.join(_valid_providers)}[/dim]"
+                    )
+                else:
+                    spec = parts[1].strip()
+                    if "/" in spec:
+                        new_provider, new_model = spec.split("/", 1)
+                        new_provider = new_provider.strip().lower()
+                        new_model = new_model.strip()
+                        if new_provider not in _valid_providers:
+                            self._console.print(
+                                f"[yellow]Unknown provider '{new_provider}'. "
+                                f"Valid: {', '.join(_valid_providers)}[/yellow]"
+                            )
+                        else:
+                            self._cfg.llm.provider = new_provider
+                            self._cfg.llm.model = new_model
+                            self._console.print(
+                                f"[dim]Model switched to [bold]{new_provider}/{new_model}[/bold][/dim]"
+                            )
+                    else:
+                        self._cfg.llm.model = spec
+                        self._console.print(
+                            f"[dim]Model switched to [bold]{self._cfg.llm.provider}/{spec}[/bold][/dim]"
+                        )
+                continue
+
             # Phase 15 — /effort: change effort level for the rest of the session
             if cmd.startswith("/effort"):
                 parts = raw.split(None, 1)
@@ -806,6 +840,7 @@ class DevAgentSession:
                     self._console.print("[dim]  /tasks       — list background tasks[/dim]")
                     self._console.print("[dim]  /loop [Ns|Nm] <cmd> — run command on schedule (/loop off to stop)[/dim]")
                     self._console.print("[bold]Other:[/bold]")
+                    self._console.print("[dim]  /model <provider/model>  — hot-swap LLM for the rest of the session[/dim]")
                     self._console.print("[dim]  /effort low|medium|high|xhigh|max  — change effort level[/dim]")
                     self._console.print("[dim]  /think on|off  — toggle extended thinking (Anthropic)[/dim]")
                     self._console.print("[dim]  !<command>  — run a shell command in the project root[/dim]")
@@ -861,7 +896,7 @@ class DevAgentSession:
                 "[dim]Skills: /explain  /test  /review  /commit  /summarize  /deep-research  /help[/dim]\n"
                 "[dim]Session: /status  /context  /clear  /rewind N  /permissions  /goal  /btw  /autocompact[/dim]\n"
                 "[dim]Agents:  /fork <task>  /tasks  /loop [Ns] <cmd>  /loop off[/dim]\n"
-                "[dim]Other:   /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd>[/dim]",
+                "[dim]Other:   /model  /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd>[/dim]",
                 border_style="cyan",
             )
         )
