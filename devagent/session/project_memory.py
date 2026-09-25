@@ -27,8 +27,18 @@ _ITEM_RE = re.compile(r"^-\s+(\S+?):\s+(.+)$", re.MULTILINE)
 class ProjectMemory:
     """Read/write .devagent/memory.md for cross-session fact persistence."""
 
-    def __init__(self, project_root: str | Path) -> None:
-        self._path = Path(project_root) / _MEMORY_FILE
+    def __init__(self, project_root: str | Path, *, path: Path | None = None) -> None:
+        if path is not None:
+            self._path = Path(path)
+        else:
+            self._path = Path(project_root) / _MEMORY_FILE
+
+    @classmethod
+    def for_agent(cls, project_root: str | Path, agent_name: str) -> ProjectMemory:
+        """Return a ProjectMemory scoped to .devagent/agent-memory/<agent_name>/memory.md."""
+        safe = agent_name.replace("/", "_").replace("\\", "_")
+        p = Path(project_root) / ".devagent" / "agent-memory" / safe / "memory.md"
+        return cls(project_root, path=p)
 
     @property
     def path(self) -> Path:
