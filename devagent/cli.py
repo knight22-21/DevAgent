@@ -1592,6 +1592,29 @@ def run(
 # Phase 7.1 — Quick action mode
 # ---------------------------------------------------------------------------
 
+def _validate_against_schema(text: str, schema: dict) -> tuple[bool, str]:
+    """Parse text as JSON and validate against schema. Returns (valid, error_message)."""
+    try:
+        import json as _json
+
+        import jsonschema
+    except ImportError:
+        return True, ""
+
+    try:
+        data = _json.loads(text)
+    except _json.JSONDecodeError as exc:
+        return False, f"Response is not valid JSON: {exc}"
+
+    try:
+        jsonschema.validate(instance=data, schema=schema)
+        return True, ""
+    except jsonschema.ValidationError as exc:
+        return False, exc.message
+    except jsonschema.SchemaError as exc:
+        return False, f"Invalid schema: {exc.message}"
+
+
 @app.command()
 def do(
     task: str = typer.Argument(..., help="Task for the agent to perform"),
@@ -1612,16 +1635,31 @@ def do(
         "default", "--permission-mode",
         help="Permission shorthand: default|accept-edits|read-only|auto|yolo",
     ),
+    json_schema: str | None = typer.Option(
+        None, "--json-schema",
+        help="JSON Schema string. Validates final answer; retries once on mismatch (exit 2 if still invalid).",
+    ),
 ) -> None:
-    """Run a single task non-interactively and exit (exit code 0=success, 1=error)."""
+    """Run a single task non-interactively and exit (exit code 0=success, 1=error, 2=schema mismatch)."""
+    import json as _json
+
     from devagent.agent.flows import DevAgentSession
-    from devagent.agent.loop import ErrorEvent
+    from devagent.agent.loop import ErrorEvent, FinalAnswerEvent
     from devagent.core.project import detect_project_root
     from devagent.output.streaming import render_events, stream_json_events
 
     if not config_exists():
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
         raise typer.Exit(1)
+
+    # Parse and validate the JSON Schema argument up-front
+    schema_dict: dict | None = None
+    if json_schema:
+        try:
+            schema_dict = _json.loads(json_schema)
+        except _json.JSONDecodeError as exc:
+            console.print(f"[red]--json-schema is not valid JSON: {exc}[/red]")
+            raise typer.Exit(1)
 
     cfg = load_config()
     if model:
@@ -1639,8 +1677,8 @@ def do(
         except Exception:
             pass
 
-    try:
-        session = DevAgentSession(
+    def _make_session() -> DevAgentSession:
+        return DevAgentSession(
             cfg,
             project_root,
             max_tokens=max_tokens,
@@ -1650,17 +1688,60 @@ def do(
             allow_tools=tools_list,
             permission_mode=permission_mode,
         )
+
+    def _extract_final_text(evs: list) -> str:
+        for ev in evs:
+            if isinstance(ev, FinalAnswerEvent):
+                return ev.text
+        return ""
+
+    try:
+        session = _make_session()
     except Exception as exc:
         _handle_error(exc)
         return
 
-    # Collect all events, render them, then determine exit code
+    # First attempt
     events = list(session._loop.run(task))
 
     if output_format == "stream-json":
         stream_json_events(iter(events))
     else:
         render_events(iter(events))
+
+    # JSON Schema validation + one retry
+    if schema_dict is not None:
+        final_text = _extract_final_text(events)
+        valid, err_msg = _validate_against_schema(final_text, schema_dict)
+        if not valid:
+            console.print(
+                f"[yellow]Schema validation failed: {err_msg}. Retrying once…[/yellow]"
+            )
+            retry_task = (
+                f"{task}\n\n"
+                f"IMPORTANT: Your previous response did not match the required JSON Schema.\n"
+                f"Error: {err_msg}\n"
+                f"Schema: {_json.dumps(schema_dict)}\n"
+                f"Respond with ONLY a JSON object that satisfies the schema. No prose, no markdown fences."
+            )
+            try:
+                retry_session = _make_session()
+                retry_events = list(retry_session._loop.run(retry_task))
+            except Exception as exc:
+                _handle_error(exc)
+                raise typer.Exit(2)
+
+            if output_format == "stream-json":
+                stream_json_events(iter(retry_events))
+            else:
+                render_events(iter(retry_events))
+
+            events = retry_events
+            retry_text = _extract_final_text(retry_events)
+            valid2, err_msg2 = _validate_against_schema(retry_text, schema_dict)
+            if not valid2:
+                console.print(f"[red]Schema validation failed after retry: {err_msg2}[/red]")
+                raise typer.Exit(2)
 
     # Clean up session record if --no-session requested
     if no_session:
