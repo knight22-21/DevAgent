@@ -124,8 +124,18 @@ def _mask_key(key: str) -> str:
     return "*" * (len(key) - 4) + key[-4:]
 
 
+_OLLAMA_CLOUD_HOST = "https://ollama.com"
+
+
 def _validate_ollama(base_url: str, model: str) -> tuple[bool, str]:
-    """Validate Ollama is running and the model is available."""
+    """Validate Ollama is running and the model is available.
+
+    For Ollama Cloud (base_url == https://ollama.com) we skip the local
+    reachability check — the API key is validated separately.
+    """
+    if base_url == _OLLAMA_CLOUD_HOST:
+        return True, f"Ollama Cloud — model {model!r} will be verified on first use"
+
     try:
         resp = httpx.get(f"{base_url}/api/tags", timeout=10)
         resp.raise_for_status()
@@ -282,10 +292,44 @@ def init() -> None:
     api_key = ""
 
     if provider == "ollama":
-        default_url = PROVIDER_DEFAULTS["ollama"]["base_url"]
-        if existing and existing.llm.base_url:
-            default_url = existing.llm.base_url
-        base_url = Prompt.ask("Ollama base URL", default=default_url)
+        # Detect whether the existing config is already cloud.
+        _existing_is_cloud = (
+            existing is not None
+            and existing.llm.provider == "ollama"
+            and (
+                existing.llm.base_url == _OLLAMA_CLOUD_HOST
+                or bool(existing.llm.api_key)
+            )
+        )
+        console.print()
+        console.print("  [dim]1. Local  — runs on your machine, fully private, free[/dim]")
+        console.print("  [dim]2. Cloud  — Ollama Cloud (API key required, 15+ hosted models)[/dim]")
+        console.print()
+        ollama_mode = Prompt.ask(
+            "Ollama mode",
+            choices=["1", "2"],
+            default="2" if _existing_is_cloud else "1",
+        )
+        if ollama_mode == "2":
+            base_url = _OLLAMA_CLOUD_HOST
+            # Override the default model to a cloud-appropriate one.
+            if model == PROVIDER_DEFAULTS["ollama"]["model"]:
+                model = Prompt.ask("Model name", default="gpt-oss:20b")
+            existing_key = existing.llm.api_key if (existing and existing.llm.provider == "ollama") else ""
+            if existing_key:
+                console.print(f"  Current API key: {_mask_key(existing_key)}")
+            api_key = Prompt.ask(
+                "Ollama Cloud API key",
+                password=True,
+                default=existing_key if existing_key else "",
+            )
+            if not api_key:
+                console.print("[yellow]Warning: no API key entered — requests will be rejected by Ollama Cloud.[/yellow]")
+        else:
+            default_url = PROVIDER_DEFAULTS["ollama"]["base_url"]
+            if existing and existing.llm.base_url and existing.llm.base_url != _OLLAMA_CLOUD_HOST:
+                default_url = existing.llm.base_url
+            base_url = Prompt.ask("Ollama base URL", default=default_url)
     else:
         existing_key = existing.llm.api_key if existing else ""
         if existing_key:
@@ -381,6 +425,10 @@ def init() -> None:
     with console.status("[cyan]Validating LLM provider...[/cyan]"):
         if provider == "ollama":
             ok, msg = _validate_ollama(base_url, model)
+            # Cloud mode: also require a key
+            if ok and base_url == _OLLAMA_CLOUD_HOST and not api_key:
+                ok = False
+                msg = "Ollama Cloud requires an API key — get one at ollama.com/settings/api-keys"
         else:
             # For cloud providers, just check that the key is non-empty
             ok = bool(api_key)
