@@ -2277,12 +2277,75 @@ This file is automatically injected into the agent's system prompt at session st
 """
 
 
+def _collect_project_context(root: Path, max_readme_lines: int = 200) -> str:
+    """Gather a compact codebase summary for LLM-based DEVAGENT.md generation."""
+    parts: list[str] = []
+
+    # Top-level directory listing (dirs + key files)
+    entries = sorted(root.iterdir(), key=lambda p: (p.is_file(), p.name))
+    listing = "\n".join(
+        ("  " + e.name + ("/" if e.is_dir() else ""))
+        for e in entries
+        if not e.name.startswith(".")
+    )
+    parts.append(f"## Directory structure\n```\n{listing}\n```")
+
+    # Key manifest files
+    for fname in ("pyproject.toml", "setup.py", "package.json", "go.mod", "Cargo.toml"):
+        p = root / fname
+        if p.exists():
+            try:
+                parts.append(f"## {fname}\n```\n{p.read_text(encoding='utf-8')[:3000]}\n```")
+            except OSError:
+                pass
+
+    # README excerpt
+    for fname in ("README.md", "README.rst", "README"):
+        p = root / fname
+        if p.exists():
+            try:
+                lines = p.read_text(encoding="utf-8").splitlines()[:max_readme_lines]
+                parts.append(f"## README excerpt\n{chr(10).join(lines)}")
+            except OSError:
+                pass
+            break
+
+    return "\n\n".join(parts)
+
+
+_GENERATE_SYSTEM = (
+    "You are a technical writer generating a DEVAGENT.md file. "
+    "DEVAGENT.md is a concise Markdown file that tells a coding AI agent how to work "
+    "effectively in this project. Write factual, specific content — no fluff. "
+    "Use ## headings: Tech stack, Test command, Code conventions, Important paths, "
+    "Known constraints. If information is not available, omit that section rather "
+    "than writing placeholder comments. Output only the Markdown content."
+)
+
+_GENERATE_USER = """\
+Analyse this project and write a DEVAGENT.md file for it.
+
+{context}
+
+Write a DEVAGENT.md with the sections: Tech stack, Test command, Code conventions, \
+Important paths, Known constraints. Be specific and concise. Output only Markdown."""
+
+
 @app.command("init-project")
 def init_project(
     path: str = typer.Argument(".", help="Project root to initialise (default: current directory)"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing DEVAGENT.md"),
+    generate: bool = typer.Option(
+        False, "--generate", "-g",
+        help="Use the configured LLM to write DEVAGENT.md from codebase analysis",
+    ),
 ) -> None:
-    """Scaffold DEVAGENT.md (project instructions) and .devagent/ directory."""
+    """Scaffold DEVAGENT.md (project instructions) and .devagent/ directory.
+
+    By default writes a static template. With --generate, the configured LLM
+    analyses key project files (pyproject.toml, README, directory layout) and
+    writes a tailored DEVAGENT.md automatically.
+    """
     root = Path(path).resolve()
 
     devagent_md = root / "DEVAGENT.md"
@@ -2294,7 +2357,28 @@ def init_project(
         console.print("Use [bold]--force[/bold] to overwrite.")
         raise typer.Exit(1)
 
-    devagent_md.write_text(_DEVAGENT_MD_TEMPLATE, encoding="utf-8")
+    if generate:
+        from devagent.core.llm import LLMClient, Message
+        cfg = load_config(root)
+        console.print("[cyan]Analysing project…[/cyan]")
+        context = _collect_project_context(root)
+        llm = LLMClient(cfg.llm)
+        try:
+            resp = llm.complete([
+                Message(role="system", content=_GENERATE_SYSTEM),
+                Message(role="user", content=_GENERATE_USER.format(context=context)),
+            ])
+            content = resp.content.strip()
+            if not content.startswith("#"):
+                content = "# DEVAGENT.md\n\n" + content
+        except Exception as exc:
+            console.print(f"[red]LLM call failed:[/red] {exc}")
+            console.print("[dim]Falling back to static template.[/dim]")
+            content = _DEVAGENT_MD_TEMPLATE
+    else:
+        content = _DEVAGENT_MD_TEMPLATE
+
+    devagent_md.write_text(content, encoding="utf-8")
     console.print(f"[green]✓[/green] Created {devagent_md}")
 
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -2307,14 +2391,17 @@ def init_project(
 
     gitignore = root / ".gitignore"
     if gitignore.exists():
-        content = gitignore.read_text(encoding="utf-8")
-        if ".devagent/" not in content:
+        content_gi = gitignore.read_text(encoding="utf-8")
+        if ".devagent/" not in content_gi:
             with gitignore.open("a", encoding="utf-8") as f:
                 f.write("\n# DevAgent cross-session memory (local only)\n.devagent/\n")
             console.print(f"[green]✓[/green] Added .devagent/ to {gitignore}")
 
     console.print("\n[bold]Next steps:[/bold]")
-    console.print("  1. Edit [bold]DEVAGENT.md[/bold] to describe your project, tech stack, and conventions.")
+    if generate:
+        console.print("  1. Review [bold]DEVAGENT.md[/bold] — the LLM may have missed details.")
+    else:
+        console.print("  1. Edit [bold]DEVAGENT.md[/bold] to describe your project, tech stack, and conventions.")
     console.print("  2. Run [bold]devagent run[/bold] — the agent will read DEVAGENT.md on startup.")
 
 
