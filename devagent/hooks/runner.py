@@ -28,12 +28,21 @@ class HookResult:
     feedback: str = ""
 
 
+_PROMPT_SYSTEM = (
+    "You are a security-policy evaluator for a coding agent. "
+    "Based on the hook prompt and tool input below, decide whether to allow or block the action. "
+    "Reply with JSON only: {\"ok\": true|false, \"reason\": \"...\"}. "
+    "Default to allowing (ok: true) when in doubt."
+)
+
+
 class HookRunner:
     """Loads hooks from hooks.toml and fires them on tool events."""
 
-    def __init__(self, project_root: str | Path) -> None:
+    def __init__(self, project_root: str | Path, cfg=None) -> None:
         self._project_root = Path(project_root)
         self._hooks: list[HookDef] = load_hooks(project_root)
+        self._cfg = cfg  # DevAgentConfig | None — used by prompt hooks
 
     def reload(self) -> None:
         """Reload hooks from disk (useful after editing hooks.toml)."""
@@ -62,12 +71,24 @@ class HookRunner:
     def _fire_lifecycle(self, event: str, extra: dict) -> None:
         env = {**os.environ, **{k.upper(): str(v) for k, v in extra.items()}}
         for hook in self._hooks:
-            if hook.event == event and hook.type == "command" and hook.command:
+            if hook.event != event:
+                continue
+            if hook.type == "command" and hook.command:
                 try:
                     subprocess.run(
                         hook.command, shell=True, env=env,
                         capture_output=True, text=True, timeout=30,
                     )
+                except Exception:
+                    pass
+            elif hook.type == "http" and hook.url:
+                try:
+                    self._call_http(hook.url, extra)
+                except Exception:
+                    pass
+            elif hook.type == "prompt" and hook.prompt:
+                try:
+                    self._call_prompt(hook.prompt, extra)
                 except Exception:
                     pass
 
@@ -101,6 +122,8 @@ class HookRunner:
             return self._run_command(hook.command, args, env)
         if hook.type == "http" and hook.url:
             return self._call_http(hook.url, args)
+        if hook.type == "prompt" and hook.prompt:
+            return self._call_prompt(hook.prompt, args)
         return HookResult(allowed=True)
 
     def _run_command(self, cmd: str, args: dict, env: dict) -> HookResult:
@@ -124,6 +147,47 @@ class HookRunner:
             except (json.JSONDecodeError, ValueError):
                 pass
 
+        return HookResult(allowed=True)
+
+    def _call_prompt(self, prompt_template: str, args: dict) -> HookResult:
+        """Call the configured LLM with a prompt template to evaluate the tool call.
+
+        The template may contain {tool_input} which is replaced with JSON-serialised args.
+        Expected LLM response: JSON {"ok": true/false, "reason": "...", "updatedInput": {...}}.
+        Falls back to allow on any error (fail-open) to avoid blocking the agent on LLM issues.
+        """
+        if not self._cfg:
+            try:
+                from devagent.core.config import load_config as _load_cfg
+                self._cfg = _load_cfg(self._project_root)
+            except Exception as exc:
+                return HookResult(allowed=True, feedback=f"prompt hook: config load failed: {exc}")
+
+        tool_input_json = json.dumps(args)
+        prompt = prompt_template.replace("{tool_input}", tool_input_json)
+
+        try:
+            from devagent.core.llm import LLMClient, Message
+            llm = LLMClient(self._cfg.llm)
+            resp = llm.complete(
+                [
+                    Message(role="system", content=_PROMPT_SYSTEM),
+                    Message(role="user", content=prompt),
+                ],
+                effort="low",
+            )
+            raw = resp.content.strip()
+            try:
+                data = json.loads(raw)
+                if not data.get("ok", True):
+                    return HookResult(allowed=False, feedback=data.get("reason", "blocked by prompt hook"))
+                if "updatedInput" in data:
+                    return HookResult(allowed=True, rewritten_args=data["updatedInput"])
+            except (json.JSONDecodeError, ValueError):
+                if raw.lower().startswith("block"):
+                    return HookResult(allowed=False, feedback=raw[:200])
+        except Exception as exc:
+            return HookResult(allowed=True, feedback=f"prompt hook error: {exc}")
         return HookResult(allowed=True)
 
     def _call_http(self, url: str, args: dict) -> HookResult:

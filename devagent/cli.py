@@ -2826,6 +2826,18 @@ def hooks_test(
     except Exception:
         console.print(f"[red]Invalid JSON: {args_json}[/red]")
         raise typer.Exit(1)
+
+    lifecycle_events = {"session_start", "session_end"}
+    if event in lifecycle_events:
+        runner._fire_lifecycle(event, {"session_id": "test-dry-run"})
+        console.print(f"[green]lifecycle hook fired[/green] event={event}")
+        return
+
+    if event == "post_tool_use":
+        runner.post_tool_use(tool, args, result="dry-run")
+        console.print(f"[green]post hook fired[/green] tool={tool}")
+        return
+
     result = runner.pre_tool_use(tool, args)
     if result.allowed:
         console.print("[green]allowed[/green]")
