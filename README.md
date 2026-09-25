@@ -27,13 +27,17 @@ DevAgent is a terminal-based AI coding agent that operates on your local codebas
 - [Integrations](#integrations)
 - [Benchmarks](#benchmarks)
 - [Commands reference](#commands-reference)
+- [REPL commands](#repl-commands)
 - [GitHub workflows](#github-workflows)
 - [Configuration](#configuration)
 - [Session management](#session-management)
 - [Security gate](#security-gate)
 - [Background watcher](#background-watcher)
+- [Agent definitions](#agent-definitions)
+- [Hooks](#hooks)
 - [Effort levels](#effort-levels)
 - [Skills](#skills)
+- [Plugin bundles](#plugin-bundles)
 - [REST API](#rest-api)
 - [Writing plugin tools](#writing-plugin-tools)
 - [Contributing](#contributing)
@@ -223,6 +227,7 @@ devagent bench leaderboard
 | `devagent run --allow <pattern>` | Auto-approve tool calls matching pattern (repeatable) |
 | `devagent run --deny <pattern>` | Auto-deny tool calls matching pattern (repeatable) |
 | `devagent do "<task>"` | Run a single task non-interactively; exits 0/1 |
+| `devagent do "<task>" --json-schema '<schema>'` | Validate response against a JSON Schema; retries once; exit 2 on second failure |
 | `devagent do "<task>" --output-format stream-json` | Machine-readable output for CI pipelines |
 | `devagent orchestrate "<task>"` | Decompose task and run parallel worker agents |
 | `devagent orchestrate "<task>" --workers N` | Control worker parallelism |
@@ -234,6 +239,7 @@ devagent bench leaderboard
 |---|---|
 | `devagent init` | Run the setup wizard (LLM provider, GitHub token) |
 | `devagent init-project` | Create a `DEVAGENT.md` project config in the current directory |
+| `devagent init-project --generate` | Use the LLM to generate a project-specific `DEVAGENT.md` from the codebase |
 | `devagent doctor` | Check provider connectivity, index status, offline capability |
 | `devagent config --show` | Print current configuration |
 | `devagent config --set key=value` | Set a configuration value |
@@ -258,6 +264,22 @@ devagent bench leaderboard
 | `devagent review <pr-url>` | Review a pull request and post inline comments |
 | `devagent triage <owner/repo>` | Triage open issues with labels and effort estimates |
 | `devagent fix-ci <run-url>` | Analyse a failed CI run and push a fix |
+| `devagent autofix-pr <pr-url>` | Watch a PR, auto-fix new CI failures and review comments, then push |
+| `devagent autofix-pr <pr-url> --poll-interval 60` | Poll every 60 seconds instead of the default 120 |
+
+### Agent definitions
+
+| Command | Description |
+|---|---|
+| `devagent agent run <name> <task>` | Run a named agent definition against a task |
+| `devagent agent list` | List agent definitions loaded from `.devagent/agents/*.toml` |
+
+### Hooks
+
+| Command | Description |
+|---|---|
+| `devagent hooks list` | List configured hooks |
+| `devagent hooks test <event> <tool>` | Dry-run a hook for a given lifecycle event and tool name |
 
 ### Skills
 
@@ -267,6 +289,19 @@ devagent bench leaderboard
 | `devagent skills new <name>` | Create a new skill interactively |
 
 Skills are reusable task templates invoked with `/<skill-name>` inside a REPL session.
+
+### Plugins
+
+| Command | Description |
+|---|---|
+| `devagent plugins list` | List all installed plugin bundles |
+| `devagent plugins install <package>` | Install a plugin bundle from PyPI or a local path |
+
+### Tasks
+
+| Command | Description |
+|---|---|
+| `devagent tasks` | List background agent tasks in the current process (running / done / failed) |
 
 ### Sessions
 
@@ -309,6 +344,44 @@ Skills are reusable task templates invoked with `/<skill-name>` inside a REPL se
 
 ---
 
+## REPL commands
+
+The interactive session (`devagent run`) recognises a set of `/` and `@` commands on top of plain task input.
+
+| Command | Description |
+|---|---|
+| `/help` | Show available REPL commands |
+| `/model <provider/model>` | Hot-swap the active LLM for this session (e.g. `/model anthropic/claude-opus-4-8`) |
+| `/model <model>` | Change model only, keep current provider |
+| `/fork <task>` | Spawn a background copy of the current session to work on a sub-task |
+| `@agent-name <task>` | Spawn a named agent definition as a background task (looked up from `.devagent/agents/`) |
+| `/tasks` | List all background tasks in this process with status and elapsed time |
+| `/loop N <cmd>` | Repeat a command every N seconds (`/loop off` to cancel) |
+| `/think` | Toggle extended thinking (Anthropic models only) |
+| `/memory` | Show or edit the current session memory block |
+| `/clear` | Clear the screen |
+| `!<shell command>` | Run a shell command directly and print the output |
+
+**Switching models mid-session:**
+
+```
+> /model ollama/qwen2.5-coder:7b
+Model switched to ollama/qwen2.5-coder:7b
+
+> /model anthropic/claude-opus-4-8
+Model switched to anthropic/claude-opus-4-8
+```
+
+**Spawning a named agent:**
+
+```
+> @code-reviewer please check the auth changes for security issues
+Spawned @code-reviewer [a3f2d1c0]: please check the auth changes for security issues
+Check progress with /tasks
+```
+
+---
+
 ## GitHub workflows
 
 DevAgent treats GitHub as a first-class integration. All GitHub commands accept full issue or PR URLs, so you do not need to configure a default repository.
@@ -344,6 +417,14 @@ devagent fix-ci https://github.com/owner/repo/actions/runs/12345
 ```
 
 The agent fetches the CI log, identifies the failing step, reads the relevant source files, proposes and applies a fix, and runs the test locally to verify before you push.
+
+**Auto-fix a PR in watch mode:**
+
+```bash
+devagent autofix-pr https://github.com/owner/repo/pull/42
+```
+
+Polls the PR in a loop. When a new CI run fails it fetches the job logs, fires an agent session to diagnose and fix the code, then pushes. When a new review comment appears it fires a session to address it. Uses `--poll-interval` (default 120 s) and `--max-polls` to control how long it runs.
 
 **Requirement:** A GitHub Personal Access Token with `repo` scope. Set it once:
 
@@ -509,6 +590,116 @@ All responses are JSON. CORS is enabled for local development. No authentication
 
 ---
 
+## Agent definitions
+
+Agent definitions are TOML files in `.devagent/agents/` that describe named sub-agents you can invoke by name from the REPL or CLI.
+
+```toml
+# .devagent/agents/code-reviewer.toml
+name = "code-reviewer"
+description = "Review the current diff for correctness and style issues"
+permission = "read-only"
+memory = "session"       # session | project
+isolation = ""           # "" | "worktree"
+prompt = "Review the changed code for bugs, style problems, and missing tests."
+```
+
+**Fields:**
+
+| Field | Description |
+|---|---|
+| `name` | Agent identifier (used in `@name` mentions and `devagent agent run`) |
+| `description` | Human-readable description |
+| `permission` | Tool permission mode: `default`, `read-only`, or `plan` |
+| `memory` | `session` (in-memory only) or `project` (persists to `.devagent/agent-memory/<name>/memory.md`) |
+| `isolation` | `worktree` to run in a fresh git worktree; empty string for shared working tree |
+| `prompt` | Default task prompt if none is given at invocation time |
+
+Project-level definitions override user-level ones with the same name. User agents live in `~/.config/devagent/agents/`.
+
+---
+
+## Hooks
+
+Hooks fire shell commands, HTTP requests, or prompt injections at lifecycle events during a session. Configure them in `DEVAGENT.md` under a `[[hooks]]` section:
+
+```toml
+[[hooks]]
+event    = "tool_call"
+tool     = "write_file"
+type     = "shell"
+command  = "echo 'Writing {path}' >> devagent.log"
+
+[[hooks]]
+event    = "session_start"
+type     = "prompt"
+template = "Project context: this is a Django 4.2 application on Python 3.12."
+
+[[hooks]]
+event    = "session_end"
+type     = "http"
+url      = "https://hooks.example.com/devagent"
+```
+
+**Hook types:**
+
+| Type | What it does |
+|---|---|
+| `shell` | Runs a shell command; `{tool}` and `{path}` are substituted from the event |
+| `prompt` | Injects the `template` text into the next LLM call |
+| `http` | POSTs a JSON payload to `url` with event metadata |
+
+**Lifecycle events:** `session_start`, `session_end`, `tool_call`, `tool_result`
+
+Test a hook without running a full session:
+
+```bash
+devagent hooks test session_start write_file
+```
+
+---
+
+## Plugin bundles
+
+Plugin bundles are distributable Python packages that extend DevAgent with tools, skills, hooks, and MCP servers. They register themselves via a `pyproject.toml` entry point:
+
+```toml
+# In the plugin package's pyproject.toml
+[project.entry-points."devagent.plugins"]
+my-plugin = "my_package.plugin:bundle"
+```
+
+```python
+# my_package/plugin.py
+from devagent.plugins import PluginBundle
+
+bundle = PluginBundle(
+    name="my-plugin",
+    version="1.0.0",
+    description="Adds Docker management tools to DevAgent",
+    tools=["docker_run", "docker_logs"],
+    skills=[{"name": "docker-build", "prompt": "Build and tag the Docker image."}],
+)
+```
+
+Once the package is installed, DevAgent discovers it automatically:
+
+```bash
+# Install a plugin
+devagent plugins install devagent-docker
+
+# Verify it loaded
+devagent plugins list
+```
+
+```
+ Installed DevAgent Plugins
+ Name           Version  Description              Skills  Hooks  MCP Servers  Tools
+ devagent-docker  1.0.0  Docker management tools       1      0            1      3
+```
+
+---
+
 ## Effort levels
 
 The `--effort` flag controls how hard the agent tries on each task. Higher effort uses more tokens and takes longer but produces better results on complex tasks.
@@ -590,6 +781,8 @@ def register(registry: ToolRegistry) -> None:
 - Avoid side effects that cannot be undone without user confirmation.
 
 See [docs/plugin_tools.md](docs/plugin_tools.md) for the full guide including security wrapping, parameter tips, and examples of the 29 built-in tools.
+
+To distribute a tool as an installable package that other users can add with `devagent plugins install`, see [Plugin bundles](#plugin-bundles).
 
 ---
 

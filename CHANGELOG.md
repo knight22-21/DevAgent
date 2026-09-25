@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-25
+
+### Added
+
+**Agent definitions and worktree isolation (Phase 18–19)**
+- `AgentDef.isolation = "worktree"` — `devagent agent run` creates a fresh git worktree for an agent and cleans it up when done; prevents concurrent agents from clobbering each other's edits
+- `devagent init-project --generate` — LLM analyses `pyproject.toml`, `README.md`, and directory layout to write a project-specific `DEVAGENT.md`; falls back to a static template if the LLM is offline
+- `load_devagent_md()` now walks ancestor directories (outermost first) so nested projects inherit parent-level instructions
+
+**Per-agent persistent memory (Phase 20)**
+- `AgentDef.memory = "project"` wires `.devagent/agent-memory/<name>/memory.md` — the agent reads it at start and writes to it via the `remember_persistent` tool; survives between invocations
+
+**HTTP and prompt hook types (Phase 21)**
+- New hook types: `http` (POST JSON to an external endpoint) and `prompt` (inject text into the next LLM call)
+- Lifecycle events `session_start` and `session_end` now fire for all hook types, not just `shell`
+- `devagent hooks test <event> <tool>` — dry-run any hook without starting a full session
+
+**Structured output flag (Phase 22)**
+- `devagent do "<task>" --json-schema '<schema>'` — validates `FinalAnswerEvent.text` against a JSON Schema; retries once with an augmented prompt on mismatch; exits with code 2 if the second attempt still fails
+- Requires `jsonschema>=4.0.0` (added as a dependency)
+
+**`/model` mid-session switch (Phase 23)**
+- `/model <provider/model>` inside `devagent run` hot-swaps the active LLM for the rest of the session without restarting
+- `/model <model>` (no slash) keeps the current provider and changes only the model name
+- Validates provider names; supported: `ollama`, `anthropic`, `openai`, `gemini`, `groq`
+
+**`autofix-pr` watch mode (Phase 24)**
+- `devagent autofix-pr <pr-url>` — polls a PR every N seconds (default 120); on each new failed CI run, fetches job logs and fires a `DevAgentSession` to fix and push; on each new review comment, fires a session to address it
+- `--poll-interval` and `--max-polls` flags for CI usage
+- Existing failures and comments at startup are seeded into `seen` sets so they are not re-processed
+
+**`@agent-name` REPL mention syntax (Phase 25)**
+- `@code-reviewer please check the auth changes` inside `devagent run` spawns the named agent as a background daemon thread; progress is tracked via the task store
+- Respects `AgentDef.isolation = "worktree"` for isolated execution
+- Use `/tasks` to check status; agents are looked up from `.devagent/agents/*.toml` and the user config dir
+
+**Plugin bundle format (Phase 26)**
+- `PluginBundle` dataclass — third-party packages declare tools, skills, hooks, and MCP servers via the `devagent.plugins` entry-point group in their `pyproject.toml`
+- `devagent plugins list` — discovers and renders all installed plugin bundles in a table
+- `devagent plugins install <package>` — wraps `pip install` and reports success/failure
+- `devagent tasks` — list all background agent tasks in the current process (running, done, failed)
+
+---
+
 ## [1.2.0] - 2026-09-25
 
 ### Added
