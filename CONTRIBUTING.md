@@ -17,6 +17,7 @@ python -m pytest tests/          # all tests should pass
 ```
 devagent/
   agent/          # AgentLoop, flows (implement, review, triage, fix-ci)
+  bench/          # Benchmark runner, oracle, report, sweep, leaderboard
   core/           # Config, LLM client, router, models
   codeprism/      # CodePrism knowledge graph client + tools
   output/         # Rich terminal renderer
@@ -26,7 +27,10 @@ devagent/
   watcher/        # Repo health monitor (async scheduler)
   cli.py          # Typer CLI — all commands live here
 tests/            # pytest suite (no mocked DB, integration-friendly)
-benchmarks/       # Token, security, and task-completion benchmarks
+benchmarks/
+  fixtures/       # Fixture projects (sample_project, js_project, go_project)
+  results/        # Saved JSON result files (gitignored locally)
+  tasks/          # task_set.json, canary.json
 docs/             # Guides: plugin tools, REST API, architecture
 ```
 
@@ -97,6 +101,16 @@ Type prefixes: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`.
 - No mocks for the session DB — tests use real SQLite in temp dirs
 - Tool handlers: always return `str`, never raise
 - No print statements — use `rich.console.Console` or yield `AgentEvent`
+
+## Adding a benchmark task
+
+1. Add a fixture project under `benchmarks/fixtures/<name>/` (copy `sample_project/` as a template).
+2. Add the task to `benchmarks/tasks/task_set.json` with a working oracle check.
+3. Verify: `devagent bench native -t <your-task-id>` dry-run should exit 0 only if the fixture is already in the passing state (most tasks intentionally fail dry-run).
+4. Run live to verify an agent can complete the task: `devagent bench native --live -t <your-task-id> --model gpt-oss:20b --provider ollama`.
+5. If the task is fast (< 30s dry-run), add it to `benchmarks/tasks/canary.json`.
+
+See `benchmarks/README.md` for the task schema and full benchmark guide.
 
 ## Opening a PR
 

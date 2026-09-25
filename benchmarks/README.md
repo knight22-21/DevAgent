@@ -1,45 +1,193 @@
-# DevAgent Benchmarks
+# DevAgent Benchmark Suite
 
-Three benchmark scripts that measure the key v1.0 quality claims.
+The benchmark suite (`devagent/bench/`) measures DevAgent's ability to complete
+real coding tasks end-to-end. Every task runs the full agent loop against an
+isolated fixture project and passes only when a `pytest` or shell oracle exits 0.
+
+---
+
+## Quick start
+
+```bash
+# Dry-run: validate the oracle/fixture infrastructure (no LLM needed)
+devagent bench native
+
+# Live run against a model
+devagent bench native --live --model gpt-oss:20b --provider ollama
+
+# Run only specific tasks
+devagent bench native --live -t bug-fix-001 -t refactor-002 --model gpt-oss:20b --provider ollama
+
+# View the leaderboard
+devagent bench leaderboard
+
+# View cross-run history
+devagent bench history
+```
+
+---
+
+## Task set
+
+`benchmarks/tasks/task_set.json` — 24 tasks across three fixture projects:
+
+| Language | Tasks | Fixture project |
+|---|---|---|
+| Python | 20 | `benchmarks/fixtures/sample_project/` |
+| JavaScript | 2 | `benchmarks/fixtures/js_project/` |
+| Go | 2 | `benchmarks/fixtures/go_project/` |
+
+### Task categories
+
+| Category | Description | Count |
+|---|---|---|
+| `bug_fix` | Fix an intentional bug so tests pass | 5 |
+| `feature_add` | Implement a new function or module | 5 |
+| `refactor` | Restructure code without changing behaviour | 3 |
+| `test_write` | Write a test suite for existing code | 4 |
+| `security_audit` | Find and document security issues | 2 |
+| `onboarding` | Explain what a module does | 2 |
+| `code_review` | Review a PR diff for bugs | 1 |
+| `feature_add` (JS/Go) | Add a feature in non-Python language | 2 |
+
+### Task schema
+
+```json
+{
+  "id": "bug-fix-001",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "description": "What the user types to the agent",
+  "fixture_project": "sample_project",
+  "oracle_check": "python -m pytest tests/test_math.py -q",
+  "oracle_pass_exit_code": 0,
+  "expected_files_touched": ["src/math_utils.py"],
+  "max_iterations": 30,
+  "timeout_sec": 120,
+  "tags": ["python", "pytest"]
+}
+```
+
+---
+
+## Benchmark scores
+
+Results from live runs with `devagent bench native --live`:
+
+| Model | Provider | Score | Run date |
+|---|---|---|---|
+| **gpt-oss:20b** | Ollama Cloud | **21/24 (87.5%)** | 2026-09-18 |
+| llama3.2:3b | Ollama (local) | 9/20 (45%) | 2026-09-07 |
+
+The leaderboard is auto-updated after every push to main. See
+[LEADERBOARD.md](../LEADERBOARD.md) for the latest rankings.
+
+---
 
 ## Running benchmarks
 
+### Dry-run (CI / no LLM)
+
+The dry-run copies each fixture to a temp dir and runs the oracle on the
+**unmodified** fixture. Oracles that require agent changes will fail — this is
+expected and intentional. The dry-run validates the framework (task loading,
+fixture copying, oracle execution) without calling any LLM.
+
 ```bash
-# All benchmarks (takes 2-5 minutes with Ollama running)
-python benchmarks/bench_token_usage.py
-python benchmarks/bench_security.py
-python benchmarks/bench_tasks.py
+devagent bench native          # all 24 tasks
+devagent bench canary          # 5 canary tasks + framework checks (used in CI)
 ```
 
-All benchmarks use synthetic workloads — no real GitHub API calls, no real file writes.
-They do call the configured LLM via `LLMClient` when `DEVAGENT_BENCH_LIVE=1` is set;
-otherwise they use saved fixture responses.
+### Live run (requires a running LLM)
 
-## Benchmark summaries
+```bash
+# Full run
+devagent bench native --live --model gpt-oss:20b --provider ollama
 
-### `bench_token_usage.py` — Token efficiency
+# Filter by category or difficulty
+devagent bench native --live --category bug_fix --model gpt-oss:20b --provider ollama
+devagent bench native --live --difficulty easy   --model gpt-oss:20b --provider ollama
 
-Compares token usage for 5 representative tasks:
-- **Baseline**: raw codebase dump in context (no CodePrism)
-- **DevAgent**: CodePrism-compressed graph context injected per turn
+# Run specific tasks (repeatable -t flag)
+devagent bench native --live -t bug-fix-001 -t test-write-001 --model gpt-oss:20b --provider ollama
+```
 
-Expected improvement: 40-70% fewer tokens for large codebases (>10k lines).
+Results are saved to `benchmarks/results/native_YYYYMMDD_HHMMSS.json` automatically.
 
-### `bench_security.py` — Security detection rate
+### Leaderboard
 
-Runs 20 write operations through the security gate:
-- 10 safe writes → expect 0 blocked
-- 6 known-bad patterns (eval, shell injection, path traversal, etc.) → expect 6 blocked
-- 4 WARN-level writes → expect 4 prompted
+```bash
+# From local results
+devagent bench leaderboard
 
-Target: 100% detection of known-bad patterns, 0% false positives on safe writes.
+# Fetch results committed to the bench-results branch
+devagent bench leaderboard --remote
 
-### `bench_tasks.py` — Task completion rate
+# Write to LEADERBOARD.md
+devagent bench leaderboard --remote --output LEADERBOARD.md
+```
 
-Simulates 10 agent tasks end-to-end with a mock LLM:
-- Edit a file + pass tests
-- Create a new module
-- Fix a CI failure (injected as tool result)
-- Triage 5 issues (mock GitHub responses)
+### Cross-run history
 
-Target: 9/10 tasks complete within 10 iterations (1 allowed to hit MAX_ITERATIONS).
+```bash
+# Show pass/fail trend from local result files
+devagent bench history
+
+# Include results from the bench-results branch
+devagent bench history --remote
+```
+
+---
+
+## CI integration
+
+`.github/workflows/canary.yml` runs `devagent bench canary` on every PR.
+The canary does not require a real LLM — it runs framework checks and dry-run
+oracle validation. CI fails if the canary pass rate drops below 80%.
+
+`.github/workflows/bench-persist.yml` runs on every push to main:
+1. Runs `devagent bench canary --save-json` and `devagent bench native --dry`
+2. Commits JSON result files to the `bench-results` orphan branch
+3. Regenerates `LEADERBOARD.md` on main via `devagent bench leaderboard --remote`
+
+---
+
+## Result file format
+
+Saved result files use a `{"meta": {...}, "results": [...]}` envelope:
+
+```json
+{
+  "meta": {
+    "model": "gpt-oss:20b",
+    "provider": "ollama",
+    "timestamp": "2026-09-18T12:37:26"
+  },
+  "results": [
+    {
+      "task_id": "bug-fix-001",
+      "passed": true,
+      "duration_sec": 28.4,
+      "iterations_used": 5,
+      "cost_usd": 0.0,
+      "oracle_output": "1 passed in 0.12s",
+      "files_touched": ["src/math_utils.py"],
+      "files_missed": []
+    }
+  ]
+}
+```
+
+Old result files (plain list format) are also supported for backward compatibility.
+
+---
+
+## Adding new tasks
+
+1. Add a fixture project under `benchmarks/fixtures/<name>/` with a working test
+   suite that can serve as the oracle.
+2. Add the task definition to `benchmarks/tasks/task_set.json`.
+3. Run `devagent bench native -t <your-new-task-id>` in dry-run mode — the oracle
+   should fail (since the fixture is unmodified).
+4. Run with `--live` to verify an agent can complete the task.
+5. Add the task to `benchmarks/tasks/canary.json` if it is fast (< 30s dry-run).
