@@ -120,6 +120,8 @@ class DevAgentSession:
         system_prompt_override: str | None = None,
         # Phase 10 — permission mode shorthand
         permission_mode: str = "default",
+        # Phase 20 — per-agent persistent memory
+        agent_name: str | None = None,
     ) -> None:
         from devagent.agent import permissions as perm_registry
         from devagent.agent.loop import AgentLoop
@@ -253,7 +255,10 @@ class DevAgentSession:
 
         from devagent.agent.system_prompt import load_devagent_md
         from devagent.session.project_memory import ProjectMemory
-        project_memory = ProjectMemory(self._project_root)
+        if agent_name:
+            project_memory = ProjectMemory.for_agent(self._project_root, agent_name)
+        else:
+            project_memory = ProjectMemory(self._project_root)
         memory = MemoryBlock(session_id, project_memory=project_memory)
         self._memory = memory
 
