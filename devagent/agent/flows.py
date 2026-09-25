@@ -445,6 +445,62 @@ class DevAgentSession:
             if not raw:
                 continue
 
+            # Phase 25 — @agent-name: spawn a named agent as a background sub-task
+            if raw.startswith("@"):
+                import threading
+                import uuid
+
+                from devagent.agents.loader import load_agent_defs
+                from devagent.session.task_store import get_store as _get_store
+
+                mention_parts = raw[1:].split(None, 1)
+                agent_mention_name = mention_parts[0].strip() if mention_parts else ""
+                agent_task = mention_parts[1].strip() if len(mention_parts) > 1 else ""
+                _agent_defs = load_agent_defs(self._project_root)
+
+                if not agent_mention_name:
+                    self._console.print("[yellow]Usage: @agent-name <task description>[/yellow]")
+                elif agent_mention_name not in _agent_defs:
+                    available = ", ".join(sorted(_agent_defs)) or "(none)"
+                    self._console.print(
+                        f"[yellow]Unknown agent: {agent_mention_name!r}. "
+                        f"Available: {available}[/yellow]"
+                    )
+                else:
+                    _ag_def = _agent_defs[agent_mention_name]
+                    _mention_task = agent_task or _ag_def.prompt or f"Run the {agent_mention_name} agent."
+                    _mention_task_id = uuid.uuid4().hex[:8]
+                    _get_store().add(_mention_task_id, f"@{agent_mention_name}: {_mention_task[:50]}")
+                    _cfg = self._cfg
+                    _root = self._project_root
+                    _ag = _ag_def
+
+                    def _bg_mention(tid=_mention_task_id, task=_mention_task, cfg=_cfg,
+                                    root=_root, ag=_ag):
+                        try:
+                            from devagent.agent.flows import DevAgentSession
+                            from devagent.agent.worktree import isolated_worktree
+                            _an = ag.name if ag.memory == "project" else None
+                            if ag.isolation == "worktree":
+                                with isolated_worktree(root, branch_prefix=ag.name) as (wt_path, _br):
+                                    bg = DevAgentSession(cfg, str(wt_path), bare=True,
+                                                         permission_mode=ag.permission, agent_name=_an)
+                                    result = bg.run_message(task, quiet=True)
+                            else:
+                                bg = DevAgentSession(cfg, root, bare=True,
+                                                     permission_mode=ag.permission, agent_name=_an)
+                                result = bg.run_message(task, quiet=True)
+                            _get_store().complete(tid, result or "done")
+                        except Exception as exc:
+                            _get_store().complete(tid, str(exc), failed=True)
+
+                    threading.Thread(target=_bg_mention, daemon=True).start()
+                    self._console.print(
+                        f"[dim]Spawned @{agent_mention_name} [{_mention_task_id}]: {_mention_task[:60]}[/dim]"
+                    )
+                    self._console.print("[dim]Check progress with /tasks[/dim]")
+                continue
+
             # Phase 13 — shell escape: !<command> runs in the project root
             if raw.startswith("!"):
                 import subprocess
@@ -895,7 +951,7 @@ class DevAgentSession:
                 f"[dim]Graph: {graph}  |  GitHub: {gh}  |  Router: {router}[/dim]\n"
                 "[dim]Skills: /explain  /test  /review  /commit  /summarize  /deep-research  /help[/dim]\n"
                 "[dim]Session: /status  /context  /clear  /rewind N  /permissions  /goal  /btw  /autocompact[/dim]\n"
-                "[dim]Agents:  /fork <task>  /tasks  /loop [Ns] <cmd>  /loop off[/dim]\n"
+                "[dim]Agents:  @agent <task>  /fork <task>  /tasks  /loop [Ns] <cmd>  /loop off[/dim]\n"
                 "[dim]Other:   /model  /effort  /think  /memory  /tokens  /security  /undo  /diff  /exit  |  !<cmd>[/dim]",
                 border_style="cyan",
             )
