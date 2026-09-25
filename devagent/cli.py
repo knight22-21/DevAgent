@@ -1881,6 +1881,44 @@ def fix_ci(
         _handle_error(exc)
 
 
+@app.command("autofix-pr")
+def autofix_pr(
+    pr_url: str = typer.Argument(
+        ..., help="GitHub PR URL (https://github.com/owner/repo/pull/N)"
+    ),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path"),
+    model: str | None = typer.Option(None, "--model", "-m"),
+    poll_interval: int = typer.Option(120, "--poll-interval", help="Seconds between polls (default 120)"),
+    max_polls: int | None = typer.Option(None, "--max-polls", help="Stop after N polls (default: run forever)"),
+) -> None:
+    """Watch a PR for CI failures and review comments, auto-fix and push.
+
+    Polls GitHub every --poll-interval seconds. Stops on Ctrl-C or --max-polls reached.
+    Requires GITHUB_TOKEN or GH_TOKEN in environment or devagent config.
+    """
+    from devagent.agent.flows import run_autofix_pr
+    from devagent.core.project import detect_project_root
+
+    if not config_exists():
+        console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
+        raise typer.Exit(1)
+
+    cfg = load_config()
+    if model:
+        cfg.llm.model = model
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
+    try:
+        run_autofix_pr(cfg, project_root, pr_url, poll_interval=poll_interval, max_polls=max_polls)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[dim]autofix-pr stopped.[/dim]")
+    except Exception as exc:
+        _handle_error(exc)
+
+
 @app.command()
 def onboard(
     project: str | None = typer.Option(

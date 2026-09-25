@@ -1294,3 +1294,242 @@ def run_fix_ci(cfg, project_root: Path, run_url: str, max_tokens: int | None = N
     session._title_set = True
     session.print_header(f"Fix CI: {run_name[:50]}")
     session.interactive_repl(first_message=first_message)
+
+
+# ---------------------------------------------------------------------------
+# autofix-pr flow  (Phase 24)
+# ---------------------------------------------------------------------------
+
+_AUTOFIX_PR_SYSTEM = """\
+## Flow: Auto-Fix Pull Request
+
+You are watching a pull request and fixing issues automatically.
+Rules:
+1. Fix only what is reported — no extra refactoring.
+2. After each fix: run the relevant tests, commit with a clear message, push.
+3. Keep fixes minimal and targeted; prefer the simplest correct change.
+"""
+
+_AUTOFIX_CI_MSG = """\
+The following CI checks failed on PR #{pr_number} ({pr_title}).
+Branch: {branch}  |  Commit: {sha}
+
+Failed job logs:
+{logs}
+
+Identify the root cause, fix it, run the tests to verify, then commit and push.
+"""
+
+_AUTOFIX_REVIEW_MSG = """\
+The following review comment(s) were left on PR #{pr_number} ({pr_title}).
+Branch: {branch}
+
+{comments}
+
+Address each comment, make the required changes, then commit and push.
+"""
+
+
+def _fetch_failed_job_logs(gh, owner: str, repo: str, run_id: str) -> tuple[list[dict], str]:
+    """Return (failed_jobs, concatenated_log_text) for a CI run."""
+    import httpx as _httpx
+    jobs_data = gh.get(f"/repos/{owner}/{repo}/actions/runs/{run_id}/jobs")
+    all_jobs = jobs_data.get("jobs", [])
+    failed_jobs = [j for j in all_jobs if j.get("conclusion") in ("failure", "timed_out")]
+    if not failed_jobs:
+        failed_jobs = [j for j in all_jobs if j.get("conclusion") not in ("success", "skipped", None)]
+
+    log_parts: list[str] = []
+    for job in failed_jobs[:3]:
+        job_id = job["id"]
+        bad_steps = [s["name"] for s in job.get("steps", []) if s.get("conclusion") in ("failure", "timed_out")]
+        log_parts.append(f"Job: {job.get('name', '?')} — failed steps: {', '.join(bad_steps) or 'none'}")
+        try:
+            r = _httpx.get(
+                f"https://api.github.com/repos/{owner}/{repo}/actions/jobs/{job_id}/logs",
+                headers=gh._headers,
+                follow_redirects=True,
+                timeout=60,
+            )
+            if r.status_code == 200:
+                log_parts.append("\n".join(r.text.splitlines()[-120:]))
+        except Exception:
+            log_parts.append("(could not fetch log)")
+
+    return failed_jobs, "\n\n---\n\n".join(log_parts)
+
+
+def run_autofix_pr(
+    cfg,
+    project_root: Path,
+    pr_url: str,
+    poll_interval: int = 120,
+    max_polls: int | None = None,
+) -> None:
+    """Watch a PR for CI failures and review comments, auto-fix and push.
+
+    Polls every `poll_interval` seconds (default 120).
+    Stops when max_polls reached or on KeyboardInterrupt.
+    """
+    import subprocess
+    import time
+
+    from rich.console import Console as _Console
+
+    from devagent.tools.github_tools import GitHubAPI
+
+    console = _Console()
+    token = _require_gh_token(cfg)
+    gh = GitHubAPI(token)
+
+    parsed = _parse_issue_or_pr_url(pr_url)
+    owner, repo, pr_number = parsed.owner, parsed.repo, parsed.number
+    repo_str = f"{owner}/{repo}"
+
+    # Fetch PR metadata
+    pr_data = gh.get(f"/repos/{owner}/{repo}/pulls/{pr_number}")
+    pr_title = pr_data.get("title", f"PR #{pr_number}")
+    branch = pr_data.get("head", {}).get("ref", "")
+    if not branch:
+        raise RuntimeError("Could not determine PR branch from GitHub API.")
+
+    console.print(
+        Panel(
+            f"[bold]Watching PR #{pr_number}: {pr_title}[/bold]\n"
+            f"[dim]Repo: {repo_str}  |  Branch: {branch}[/dim]\n"
+            f"[dim]Poll interval: {poll_interval}s  |  Press Ctrl-C to stop[/dim]",
+            title="autofix-pr",
+            border_style="cyan",
+        )
+    )
+
+    # Checkout PR branch locally so fixes land on the right branch
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", branch], cwd=str(project_root),
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "checkout", branch], cwd=str(project_root),
+            capture_output=True, check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Could not checkout branch {branch!r}: {exc.stderr.decode().strip()}") from exc
+
+    seen_run_ids: set[str] = set()
+    seen_comment_ids: set[int] = set()
+
+    # Seed seen_run_ids with already-completed runs so we don't re-process them
+    try:
+        runs_data = gh.get(f"/repos/{owner}/{repo}/actions/runs?branch={branch}&per_page=20")
+        for run in runs_data.get("workflow_runs", []):
+            if run.get("conclusion") in ("failure", "timed_out", "success", "cancelled"):
+                seen_run_ids.add(str(run["id"]))
+    except Exception:
+        pass
+
+    # Seed seen_comment_ids
+    try:
+        comments = gh.get(f"/repos/{owner}/{repo}/pulls/{pr_number}/comments")
+        for c in comments:
+            seen_comment_ids.add(c["id"])
+    except Exception:
+        pass
+
+    polls = 0
+    while max_polls is None or polls < max_polls:
+        polls += 1
+        console.print(f"[dim]Poll #{polls} — checking PR #{pr_number}…[/dim]")
+
+        # ---- Check for new failed CI runs ----
+        try:
+            runs_data = gh.get(f"/repos/{owner}/{repo}/actions/runs?branch={branch}&per_page=20")
+            for run in runs_data.get("workflow_runs", []):
+                run_id = str(run["id"])
+                conclusion = run.get("conclusion")
+                status = run.get("status")
+                if run_id in seen_run_ids:
+                    continue
+                if status != "completed":
+                    continue
+                seen_run_ids.add(run_id)
+                if conclusion not in ("failure", "timed_out"):
+                    continue
+
+                console.print(f"[yellow]CI failure detected: run {run_id} — {run.get('name', '?')}[/yellow]")
+
+                # Pull latest before fixing
+                subprocess.run(
+                    ["git", "pull", "origin", branch], cwd=str(project_root),
+                    capture_output=True,
+                )
+
+                failed_jobs, log_text = _fetch_failed_job_logs(gh, owner, repo, run_id)
+                if not failed_jobs:
+                    console.print("[dim]No failed jobs found; skipping.[/dim]")
+                    continue
+
+                head_sha = run.get("head_sha", "")[:7]
+                message = _AUTOFIX_CI_MSG.format(
+                    pr_number=pr_number,
+                    pr_title=pr_title,
+                    branch=branch,
+                    sha=head_sha,
+                    logs=log_text,
+                )
+                session = DevAgentSession(
+                    cfg, project_root, bare=True, extra_system=_AUTOFIX_PR_SYSTEM,
+                )
+                session.run_message(message, quiet=True)
+                console.print(f"[green]CI fix applied for run {run_id}.[/green]")
+
+        except Exception as exc:
+            console.print(f"[red]Error checking CI runs: {exc}[/red]")
+
+        # ---- Check for new review comments ----
+        try:
+            new_comments: list[dict] = []
+            comments = gh.get(f"/repos/{owner}/{repo}/pulls/{pr_number}/comments")
+            for c in comments:
+                if c["id"] not in seen_comment_ids:
+                    seen_comment_ids.add(c["id"])
+                    new_comments.append(c)
+
+            if new_comments:
+                console.print(f"[yellow]{len(new_comments)} new review comment(s) found.[/yellow]")
+
+                # Pull latest before fixing
+                subprocess.run(
+                    ["git", "pull", "origin", branch], cwd=str(project_root),
+                    capture_output=True,
+                )
+
+                comment_text = "\n\n".join(
+                    f"File: {c.get('path', '?')} (line {c.get('line', '?')})\n"
+                    f"Comment: {c.get('body', '(empty)')}"
+                    for c in new_comments
+                )
+                message = _AUTOFIX_REVIEW_MSG.format(
+                    pr_number=pr_number,
+                    pr_title=pr_title,
+                    branch=branch,
+                    comments=comment_text,
+                )
+                session = DevAgentSession(
+                    cfg, project_root, bare=True, extra_system=_AUTOFIX_PR_SYSTEM,
+                )
+                session.run_message(message, quiet=True)
+                console.print(f"[green]Review comments addressed ({len(new_comments)} comment(s)).[/green]")
+
+        except Exception as exc:
+            console.print(f"[red]Error checking review comments: {exc}[/red]")
+
+        if max_polls is not None and polls >= max_polls:
+            break
+
+        try:
+            console.print(f"[dim]Sleeping {poll_interval}s…[/dim]")
+            time.sleep(poll_interval)
+        except KeyboardInterrupt:
+            console.print("\n[dim]autofix-pr stopped.[/dim]")
+            break
