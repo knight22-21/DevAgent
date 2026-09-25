@@ -45,6 +45,8 @@ dependencies = [
     # REST + WebSocket API server (devagent serve)
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
+    # JSON Schema validation (--json-schema flag)
+    "jsonschema>=4.0.0",
 ]
 
 [project.urls]
