@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
+pytest.importorskip("nbformat")
+
 from devagent.tools.notebook_tools import register_notebook_tools
 from devagent.tools.registry import ToolRegistry
 
