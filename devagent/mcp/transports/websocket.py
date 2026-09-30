@@ -20,7 +20,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from mcp import ClientSession
-from mcp.client.websocket import websocket_client
 
 from devagent.mcp.client import MCPClient
 
@@ -30,7 +29,11 @@ async def connect_websocket(
     name: str,
     url: str,
 ) -> AsyncGenerator[MCPClient, None]:
-    """Open a WebSocket MCP connection and yield a ready-to-use MCPClient."""
+    """Open a WebSocket MCP connection and yield a ready-to-use MCPClient.
+
+    Requires mcp>=1.2 (mcp.client.websocket). Raises ImportError on older versions.
+    """
+    from mcp.client.websocket import websocket_client  # lazy: not all mcp builds include this
     async with websocket_client(url) as (read_stream, write_stream):  # noqa: SIM117
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
