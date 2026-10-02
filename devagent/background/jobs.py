@@ -72,7 +72,7 @@ def launch(
 
     cmd = [py, "-m", "devagent", "do", task, "--output-format", "stream-json"]
 
-    with open(log_path, "w") as log_fh:
+    with open(log_path, "w", encoding="utf-8") as log_fh:
         if os.name == "nt":
             proc = subprocess.Popen(
                 cmd,
@@ -106,12 +106,12 @@ def launch(
 
 
 def _save(job: BackgroundJob) -> None:
-    with open(job.state_path, "w") as f:
+    with open(job.state_path, "w", encoding="utf-8") as f:
         json.dump(asdict(job), f, indent=2)
 
 
 def _load(state_path: str | Path) -> BackgroundJob:
-    with open(state_path) as f:
+    with open(state_path, encoding="utf-8") as f:
         data = json.load(f)
     return BackgroundJob(**data)
 

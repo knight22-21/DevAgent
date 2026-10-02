@@ -83,6 +83,30 @@ class TestSaveLoad:
         assert loaded.task == "write tests"
         assert loaded.status == "running"
 
+    def test_load_utf8_state_with_non_utf8_default(self, tmp_path, monkeypatch) -> None:
+        import builtins
+        from dataclasses import asdict
+
+        from devagent.background import jobs
+
+        state_path = tmp_path / "bg_unicode.json"
+        job = jobs.BackgroundJob(
+            id="unicode", task="修正 café — résumé", pid=1,
+            log_path=str(tmp_path / "日本語.log"), state_path=str(state_path),
+            started_at=0.0,
+        )
+        state_path.write_text(json.dumps(asdict(job), ensure_ascii=False), encoding="utf-8")
+        original_open = builtins.open
+
+        def locale_open(path, mode="r", **kwargs):
+            kwargs.setdefault("encoding", "cp1252")
+            return original_open(path, mode, **kwargs)
+
+        monkeypatch.setattr(jobs, "open", locale_open, raising=False)
+        assert jobs._load(state_path) == job
+        jobs._save(job)
+        assert jobs._load(state_path) == job
+
     def test_save_writes_json(self, tmp_path) -> None:
         from devagent.background.jobs import BackgroundJob, _save
         state_path = str(tmp_path / "bg_x.json")

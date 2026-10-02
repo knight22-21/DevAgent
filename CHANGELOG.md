@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Use UTF-8 explicitly for background job log and state files, preserving
+  Unicode task descriptions and paths on systems with non-UTF-8 locales.
+
 ### Added
 
 **`/keybindings` REPL command (Phase 42)**
