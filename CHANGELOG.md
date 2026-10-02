@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `_gemini` now forwards the tool definitions and converts `FunctionCall` parts back into `ToolCallRequest`; the reply is read from `candidates[0].content.parts` instead of `resp.text`, which raises when the reply has no text part (a pure function call has none)
 - gemini's `Schema` proto rejects unknown keywords rather than ignoring them (`ValueError: Unknown field for Schema: <keyword>`), so tool schemas are reduced to the keywords the proto carries — ten of the twenty-three shipped tool schemas include a JSON-Schema `default`, which would have raised on the first tool-using call
 - 13 tests in `tests/test_gemini_tool_calling.py`, offline: the SDK's own request builder runs for real and only the transport client is faked
+**The OAuth redirect port is no longer released between picking it and listening on it**
+- `_find_free_port()` bound a socket, read the port and closed it again, so any process on the machine could claim that port before the callback server bound it — the browser's redirect then landed on a port nothing was listening on and the flow died with a connection refused
+- the flow now binds the socket once (`_bind_callback_socket`) and hands it to the server, which adopts it instead of binding a port of its own; the socket is closed when the flow ends rather than staying bound for the rest of the process
+- 6 tests in `tests/test_pkce_callback_port.py`, including the end-to-end arm that follows the redirect the flow advertises
 
 ### Added
 
