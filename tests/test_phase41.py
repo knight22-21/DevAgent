@@ -54,7 +54,7 @@ class TestFileToolsExtraDirs:
     def test_read_inside_extra_dir(self, tmp_path) -> None:
         extra = tmp_path / "extra"
         extra.mkdir()
-        (extra / "note.txt").write_text("hello")
+        (extra / "note.txt").write_text("hello", encoding="utf-8")
 
         reg = self._registry(tmp_path / "project", extra_dirs=[str(extra)])
         (tmp_path / "project").mkdir()
@@ -70,7 +70,7 @@ class TestFileToolsExtraDirs:
         reg = self._registry(project, extra_dirs=[str(extra)])
         result = reg.call("write_file", {"path": str(extra / "out.txt"), "content": "hi"})
         assert "error" not in result.lower()
-        assert (extra / "out.txt").read_text() == "hi"
+        assert (extra / "out.txt").read_text(encoding="utf-8") == "hi"
 
     def test_write_outside_all_dirs_rejected(self, tmp_path) -> None:
         project = tmp_path / "project"
@@ -98,7 +98,7 @@ class TestDiffConfirmFn:
         return registry, calls
 
     def test_confirm_called_on_write(self, tmp_path) -> None:
-        (tmp_path / "f.txt").write_text("old")
+        (tmp_path / "f.txt").write_text("old", encoding="utf-8")
         reg, calls = self._registry_with_confirm(tmp_path)
         reg.call("write_file", {"path": "f.txt", "content": "new"})
         assert len(calls) == 1
@@ -106,30 +106,30 @@ class TestDiffConfirmFn:
         assert "old" in calls[0][1] or "new" in calls[0][1]
 
     def test_rejected_write_does_not_change_file(self, tmp_path) -> None:
-        (tmp_path / "f.txt").write_text("original")
+        (tmp_path / "f.txt").write_text("original", encoding="utf-8")
         reg, _ = self._registry_with_confirm(tmp_path, confirm_return=False)
         result = reg.call("write_file", {"path": "f.txt", "content": "changed"})
         assert "[skipped]" in result
-        assert (tmp_path / "f.txt").read_text() == "original"
+        assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "original"
 
     def test_accepted_write_changes_file(self, tmp_path) -> None:
-        (tmp_path / "f.txt").write_text("old")
+        (tmp_path / "f.txt").write_text("old", encoding="utf-8")
         reg, _ = self._registry_with_confirm(tmp_path, confirm_return=True)
         reg.call("write_file", {"path": "f.txt", "content": "new content"})
-        assert (tmp_path / "f.txt").read_text() == "new content"
+        assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "new content"
 
     def test_confirm_called_on_edit(self, tmp_path) -> None:
-        (tmp_path / "g.txt").write_text("foo bar baz")
+        (tmp_path / "g.txt").write_text("foo bar baz", encoding="utf-8")
         reg, calls = self._registry_with_confirm(tmp_path)
         reg.call("edit_file", {"path": "g.txt", "old_str": "bar", "new_str": "qux"})
         assert len(calls) == 1
 
     def test_rejected_edit_does_not_change_file(self, tmp_path) -> None:
-        (tmp_path / "g.txt").write_text("hello world")
+        (tmp_path / "g.txt").write_text("hello world", encoding="utf-8")
         reg, _ = self._registry_with_confirm(tmp_path, confirm_return=False)
         result = reg.call("edit_file", {"path": "g.txt", "old_str": "world", "new_str": "there"})
         assert "[skipped]" in result
-        assert (tmp_path / "g.txt").read_text() == "hello world"
+        assert (tmp_path / "g.txt").read_text(encoding="utf-8") == "hello world"
 
     def test_new_file_write_confirm_called(self, tmp_path) -> None:
         """Creating a new file produces a diff (from empty) — confirm is called."""
@@ -139,11 +139,11 @@ class TestDiffConfirmFn:
         assert "brand_new.txt" in calls[0][0]
 
     def test_no_confirm_fn_writes_unconditionally(self, tmp_path) -> None:
-        (tmp_path / "h.txt").write_text("old")
+        (tmp_path / "h.txt").write_text("old", encoding="utf-8")
         reg = ToolRegistry()
         register_file_tools(reg, str(tmp_path))
         reg.call("write_file", {"path": "h.txt", "content": "new"})
-        assert (tmp_path / "h.txt").read_text() == "new"
+        assert (tmp_path / "h.txt").read_text(encoding="utf-8") == "new"
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ class TestBuildRegistryPhase41:
         extra.mkdir()
         project = tmp_path / "project"
         project.mkdir()
-        (extra / "x.txt").write_text("data")
+        (extra / "x.txt").write_text("data", encoding="utf-8")
 
         reg = build_registry(project_root=str(project), extra_dirs=[str(extra)])
         result = reg.call("read_file", {"path": str(extra / "x.txt")})
@@ -165,7 +165,7 @@ class TestBuildRegistryPhase41:
 
     def test_diff_confirm_fn_passed_through(self, tmp_path) -> None:
         from devagent.tools.registry import build_registry
-        (tmp_path / "t.txt").write_text("before")
+        (tmp_path / "t.txt").write_text("before", encoding="utf-8")
         confirmed: list[bool] = []
 
         def _fn(path, diff):

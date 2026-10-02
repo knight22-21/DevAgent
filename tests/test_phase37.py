@@ -41,17 +41,17 @@ def _run_batch(
 
 class TestBatchGlobExpansion:
     def test_matches_files(self, tmp_path) -> None:
-        (tmp_path / "a.py").write_text("pass")
-        (tmp_path / "b.py").write_text("pass")
-        (tmp_path / "c.txt").write_text("text")
+        (tmp_path / "a.py").write_text("pass", encoding="utf-8")
+        (tmp_path / "b.py").write_text("pass", encoding="utf-8")
+        (tmp_path / "c.txt").write_text("text", encoding="utf-8")
         matched = sorted(glob.glob("*.py", root_dir=str(tmp_path), recursive=True))
         assert matched == ["a.py", "b.py"]
 
     def test_recursive_glob(self, tmp_path) -> None:
         sub = tmp_path / "sub"
         sub.mkdir()
-        (tmp_path / "top.py").write_text("")
-        (sub / "nested.py").write_text("")
+        (tmp_path / "top.py").write_text("", encoding="utf-8")
+        (sub / "nested.py").write_text("", encoding="utf-8")
         matched = sorted(glob.glob("**/*.py", root_dir=str(tmp_path), recursive=True))
         assert "top.py" in matched
         assert "sub/nested.py" in matched or "sub\\nested.py" in matched
@@ -64,7 +64,7 @@ class TestBatchGlobExpansion:
 class TestBatchFanOut:
     def test_all_files_processed(self, tmp_path) -> None:
         for name in ("a.py", "b.py", "c.py"):
-            (tmp_path / name).write_text("")
+            (tmp_path / name).write_text("", encoding="utf-8")
 
         seen: list[str] = []
 
@@ -77,7 +77,7 @@ class TestBatchFanOut:
         assert all(v == "done" for v in results.values())
 
     def test_error_captured_per_file(self, tmp_path) -> None:
-        (tmp_path / "bad.py").write_text("")
+        (tmp_path / "bad.py").write_text("", encoding="utf-8")
 
         def _worker(fpath: str, task: str) -> str:
             raise RuntimeError("boom")
@@ -95,7 +95,7 @@ class TestBatchFanOut:
         import time
 
         for i in range(8):
-            (tmp_path / f"f{i}.py").write_text("")
+            (tmp_path / f"f{i}.py").write_text("", encoding="utf-8")
 
         concurrent_counts: list[int] = []
         active = [0]
@@ -115,7 +115,7 @@ class TestBatchFanOut:
 
     def test_result_keys_match_glob(self, tmp_path) -> None:
         for name in ("x.py", "y.py"):
-            (tmp_path / name).write_text("")
+            (tmp_path / name).write_text("", encoding="utf-8")
 
         def _worker(fpath: str, task: str) -> str:
             return "ok"

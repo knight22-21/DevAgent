@@ -16,12 +16,12 @@ class TestLoadDevagentMd:
         assert load_devagent_md(tmp_path) == ""
 
     def test_returns_content_from_project_root(self, tmp_path: Path) -> None:
-        (tmp_path / "DEVAGENT.md").write_text("# project\nmy instructions")
+        (tmp_path / "DEVAGENT.md").write_text("# project\nmy instructions", encoding="utf-8")
         result = load_devagent_md(tmp_path)
         assert "my instructions" in result
 
     def test_strips_whitespace(self, tmp_path: Path) -> None:
-        (tmp_path / "DEVAGENT.md").write_text("  content  \n\n")
+        (tmp_path / "DEVAGENT.md").write_text("  content  \n\n", encoding="utf-8")
         assert load_devagent_md(tmp_path) == "content"
 
 
@@ -34,8 +34,8 @@ class TestAncestorScoping:
         parent = tmp_path / "parent"
         child = parent / "child"
         child.mkdir(parents=True)
-        (parent / "DEVAGENT.md").write_text("# parent\nteam conventions")
-        (child / "DEVAGENT.md").write_text("# project\nproject-specific")
+        (parent / "DEVAGENT.md").write_text("# parent\nteam conventions", encoding="utf-8")
+        (child / "DEVAGENT.md").write_text("# project\nproject-specific", encoding="utf-8")
 
         result = load_devagent_md(child)
         assert "team conventions" in result
@@ -47,7 +47,7 @@ class TestAncestorScoping:
         parent = tmp_path / "parent"
         child = parent / "child"
         child.mkdir(parents=True)
-        (parent / "DEVAGENT.md").write_text("# global\nglobal rules")
+        (parent / "DEVAGENT.md").write_text("# global\nglobal rules", encoding="utf-8")
 
         result = load_devagent_md(child)
         assert "global rules" in result
@@ -55,7 +55,7 @@ class TestAncestorScoping:
     def test_no_ancestor_only_project_file(self, tmp_path: Path) -> None:
         project = tmp_path / "project"
         project.mkdir()
-        (project / "DEVAGENT.md").write_text("# project\nonly project")
+        (project / "DEVAGENT.md").write_text("# project\nonly project", encoding="utf-8")
 
         result = load_devagent_md(project)
         assert "only project" in result
@@ -65,9 +65,9 @@ class TestAncestorScoping:
         b = a / "b"
         c = b / "c"
         c.mkdir(parents=True)
-        (a / "DEVAGENT.md").write_text("level-a")
-        (b / "DEVAGENT.md").write_text("level-b")
-        (c / "DEVAGENT.md").write_text("level-c")
+        (a / "DEVAGENT.md").write_text("level-a", encoding="utf-8")
+        (b / "DEVAGENT.md").write_text("level-b", encoding="utf-8")
+        (c / "DEVAGENT.md").write_text("level-c", encoding="utf-8")
 
         result = load_devagent_md(c)
         assert result.index("level-a") < result.index("level-b") < result.index("level-c")
@@ -76,8 +76,8 @@ class TestAncestorScoping:
         parent = tmp_path / "parent"
         child = parent / "child"
         child.mkdir(parents=True)
-        (parent / "DEVAGENT.md").write_text("parent content")
-        (child / "DEVAGENT.md").write_text("child content")
+        (parent / "DEVAGENT.md").write_text("parent content", encoding="utf-8")
+        (child / "DEVAGENT.md").write_text("child content", encoding="utf-8")
 
         result = load_devagent_md(child)
         assert "---" in result
@@ -92,7 +92,7 @@ class TestCollectProjectContext:
         from devagent.cli import _collect_project_context
         (tmp_path / "src").mkdir()
         (tmp_path / "tests").mkdir()
-        (tmp_path / "README.md").write_text("hello")
+        (tmp_path / "README.md").write_text("hello", encoding="utf-8")
 
         ctx = _collect_project_context(tmp_path)
         assert "src/" in ctx
@@ -100,14 +100,14 @@ class TestCollectProjectContext:
 
     def test_includes_pyproject_toml(self, tmp_path: Path) -> None:
         from devagent.cli import _collect_project_context
-        (tmp_path / "pyproject.toml").write_text('[project]\nname = "myapp"')
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "myapp"', encoding="utf-8")
 
         ctx = _collect_project_context(tmp_path)
         assert "myapp" in ctx
 
     def test_includes_readme_excerpt(self, tmp_path: Path) -> None:
         from devagent.cli import _collect_project_context
-        (tmp_path / "README.md").write_text("My Project\n\nDoes cool stuff.")
+        (tmp_path / "README.md").write_text("My Project\n\nDoes cool stuff.", encoding="utf-8")
 
         ctx = _collect_project_context(tmp_path)
         assert "Does cool stuff" in ctx
@@ -144,7 +144,7 @@ class TestInitProjectStatic:
         from typer.testing import CliRunner
 
         from devagent.cli import app
-        (tmp_path / "DEVAGENT.md").write_text("existing")
+        (tmp_path / "DEVAGENT.md").write_text("existing", encoding="utf-8")
         runner = CliRunner()
         result = runner.invoke(app, ["init-project", str(tmp_path)])
         assert result.exit_code != 0
@@ -154,7 +154,7 @@ class TestInitProjectStatic:
         from typer.testing import CliRunner
 
         from devagent.cli import app
-        (tmp_path / "DEVAGENT.md").write_text("existing")
+        (tmp_path / "DEVAGENT.md").write_text("existing", encoding="utf-8")
         runner = CliRunner()
         result = runner.invoke(app, ["init-project", str(tmp_path), "--force"])
         assert result.exit_code == 0

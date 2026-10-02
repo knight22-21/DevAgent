@@ -25,7 +25,7 @@ class TestLoadMcpJson:
             "mcpServers": {
                 "my-tool": {"command": "python", "args": ["-m", "my_tool"]}
             }
-        }))
+        }), encoding="utf-8")
         entries = load_mcp_json(tmp_path)
         assert len(entries) == 1
         assert entries[0].name == "my-tool"
@@ -38,7 +38,7 @@ class TestLoadMcpJson:
                 "server-a": {"command": "node", "args": ["a.js"]},
                 "server-b": {"command": "python", "args": ["-m", "b"]},
             }
-        }))
+        }), encoding="utf-8")
         entries = load_mcp_json(tmp_path)
         names = {e.name for e in entries}
         assert names == {"server-a", "server-b"}
@@ -48,7 +48,7 @@ class TestLoadMcpJson:
             "mcpServers": {
                 "s": {"command": "python", "env": {"MY_KEY": "abc", "OTHER": "xyz"}}
             }
-        }))
+        }), encoding="utf-8")
         entries = load_mcp_json(tmp_path)
         assert entries[0].env == {"MY_KEY": "abc", "OTHER": "xyz"}
 
@@ -58,17 +58,17 @@ class TestLoadMcpJson:
                 "good": {"command": "python"},
                 "bad": {"args": ["-m", "something"]},  # no command
             }
-        }))
+        }), encoding="utf-8")
         entries = load_mcp_json(tmp_path)
         assert len(entries) == 1
         assert entries[0].name == "good"
 
     def test_returns_empty_on_malformed_json(self, tmp_path: pathlib.Path) -> None:
-        (tmp_path / ".mcp.json").write_text("{invalid json}")
+        (tmp_path / ".mcp.json").write_text("{invalid json}", encoding="utf-8")
         assert load_mcp_json(tmp_path) == []
 
     def test_returns_empty_on_empty_servers(self, tmp_path: pathlib.Path) -> None:
-        (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {}}))
+        (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
         assert load_mcp_json(tmp_path) == []
 
     def test_falls_back_to_devagent_mcp_json(self, tmp_path: pathlib.Path) -> None:
@@ -76,7 +76,7 @@ class TestLoadMcpJson:
         devagent_dir.mkdir()
         (devagent_dir / "mcp.json").write_text(json.dumps({
             "mcpServers": {"fallback": {"command": "echo"}}
-        }))
+        }), encoding="utf-8")
         entries = load_mcp_json(tmp_path)
         assert len(entries) == 1
         assert entries[0].name == "fallback"
@@ -84,12 +84,12 @@ class TestLoadMcpJson:
     def test_primary_mcp_json_takes_precedence(self, tmp_path: pathlib.Path) -> None:
         (tmp_path / ".mcp.json").write_text(json.dumps({
             "mcpServers": {"primary": {"command": "python"}}
-        }))
+        }), encoding="utf-8")
         devagent_dir = tmp_path / ".devagent"
         devagent_dir.mkdir()
         (devagent_dir / "mcp.json").write_text(json.dumps({
             "mcpServers": {"secondary": {"command": "node"}}
-        }))
+        }), encoding="utf-8")
         entries = load_mcp_json(tmp_path)
         names = {e.name for e in entries}
         assert "primary" in names
@@ -106,7 +106,7 @@ class TestFindMcpJson:
 
     def test_returns_path_when_present(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / ".mcp.json"
-        p.write_text("{}")
+        p.write_text("{}", encoding="utf-8")
         assert find_mcp_json(tmp_path) == p
 
 
@@ -119,43 +119,43 @@ class TestSaveMcpJson:
         entry = MCPServerEntry(name="my-server", command="python", args=["-m", "srv"])
         path = save_mcp_json(tmp_path, [entry])
         assert path.exists()
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert "my-server" in data["mcpServers"]
         assert data["mcpServers"]["my-server"]["command"] == "python"
 
     def test_preserves_existing_servers(self, tmp_path: pathlib.Path) -> None:
         existing = {"mcpServers": {"old": {"command": "node"}}}
-        (tmp_path / ".mcp.json").write_text(json.dumps(existing))
+        (tmp_path / ".mcp.json").write_text(json.dumps(existing), encoding="utf-8")
         entry = MCPServerEntry(name="new", command="python")
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         assert "old" in data["mcpServers"]
         assert "new" in data["mcpServers"]
 
     def test_overwrites_existing_entry(self, tmp_path: pathlib.Path) -> None:
         existing = {"mcpServers": {"s": {"command": "node", "args": ["old.js"]}}}
-        (tmp_path / ".mcp.json").write_text(json.dumps(existing))
+        (tmp_path / ".mcp.json").write_text(json.dumps(existing), encoding="utf-8")
         entry = MCPServerEntry(name="s", command="python", args=["-m", "new"])
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         assert data["mcpServers"]["s"]["command"] == "python"
 
     def test_env_saved_when_present(self, tmp_path: pathlib.Path) -> None:
         entry = MCPServerEntry(name="s", command="python", env={"KEY": "val"})
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         assert data["mcpServers"]["s"]["env"] == {"KEY": "val"}
 
     def test_env_omitted_when_empty(self, tmp_path: pathlib.Path) -> None:
         entry = MCPServerEntry(name="s", command="python")
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         assert "env" not in data["mcpServers"]["s"]
 
     def test_args_omitted_when_empty(self, tmp_path: pathlib.Path) -> None:
         entry = MCPServerEntry(name="s", command="python")
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         assert "args" not in data["mcpServers"]["s"]
 
 

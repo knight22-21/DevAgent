@@ -18,7 +18,7 @@ def _make_git_repo(path: Path) -> None:
     subprocess.run(["git", "init", str(path)], capture_output=True, check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "test@test.com"], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True)
-    (path / "README.md").write_text("hello")
+    (path / "README.md").write_text("hello", encoding="utf-8")
     subprocess.run(["git", "-C", str(path), "add", "."], check=True)
     subprocess.run(["git", "-C", str(path), "commit", "-m", "init"], capture_output=True, check=True)
 
@@ -71,7 +71,7 @@ class TestIsolatedWorktreeHappyPath:
         _make_git_repo(tmp_path)
         with isolated_worktree(tmp_path, branch_prefix="test") as (wt_path, branch):
             captured_branch = branch
-            (wt_path / "new.txt").write_text("change")
+            (wt_path / "new.txt").write_text("change", encoding="utf-8")
             subprocess.run(["git", "-C", str(wt_path), "add", "."], check=True)
             subprocess.run(
                 ["git", "-C", str(wt_path), "commit", "-m", "change"],
@@ -120,7 +120,8 @@ class TestAgentDefIsolationField:
         agents_dir = tmp_path / ".devagent" / "agents"
         agents_dir.mkdir(parents=True)
         (agents_dir / "myagent.toml").write_text(
-            'name = "myagent"\nisolation = "worktree"\n'
+            'name = "myagent"\nisolation = "worktree"\n',
+        encoding="utf-8"
         )
         defs = load_agent_defs(tmp_path)
         assert "myagent" in defs

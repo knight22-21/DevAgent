@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 def _write_hooks_toml(project: Path, content: str) -> None:
     devagent = project / ".devagent"
     devagent.mkdir(parents=True, exist_ok=True)
-    (devagent / "hooks.toml").write_text(content)
+    (devagent / "hooks.toml").write_text(content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

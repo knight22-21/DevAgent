@@ -81,7 +81,7 @@ def test_pass_logs_write(tmp_path):
         security_log=log,
     )
     # Write the file so record_write actually fires
-    (tmp_path / "foo.py").write_text("x = 1")
+    (tmp_path / "foo.py").write_text("x = 1", encoding="utf-8")
     wrapped({"path": "foo.py", "content": "x = 2"})
     write_events = [e for e in log if e.get("action") == "WRITE"]
     assert len(write_events) == 1

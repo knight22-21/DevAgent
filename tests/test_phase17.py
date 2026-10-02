@@ -101,7 +101,7 @@ class TestTaskLoading:
             }
         ]
         p = tmp_path / "tasks.json"
-        p.write_text(json.dumps(task_data))
+        p.write_text(json.dumps(task_data), encoding="utf-8")
         tasks = BenchRunner.load_tasks(task_file=p)
         assert len(tasks) == 1
         assert tasks[0].id == "test-001"

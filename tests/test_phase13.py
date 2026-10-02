@@ -21,7 +21,7 @@ def _make_registry(project_root: str):
 class TestFileDiff:
     def test_edit_file_includes_diff(self, tmp_path: Path) -> None:
         f = tmp_path / "foo.py"
-        f.write_text("x = 1\ny = 2\n")
+        f.write_text("x = 1\ny = 2\n", encoding="utf-8")
         reg = _make_registry(str(tmp_path))
         result = reg.call("edit_file", {"path": "foo.py", "old_str": "x = 1", "new_str": "x = 99"})
         assert "---diff---" in result
@@ -39,7 +39,7 @@ class TestFileDiff:
 
     def test_write_file_overwrite_includes_diff(self, tmp_path: Path) -> None:
         f = tmp_path / "cfg.py"
-        f.write_text("DEBUG = False\n")
+        f.write_text("DEBUG = False\n", encoding="utf-8")
         reg = _make_registry(str(tmp_path))
         result = reg.call("write_file", {"path": "cfg.py", "content": "DEBUG = True\n"})
         assert "---diff---" in result
@@ -49,7 +49,7 @@ class TestFileDiff:
 
     def test_edit_file_error_no_diff(self, tmp_path: Path) -> None:
         f = tmp_path / "bar.py"
-        f.write_text("a = 1\n")
+        f.write_text("a = 1\n", encoding="utf-8")
         reg = _make_registry(str(tmp_path))
         result = reg.call("edit_file", {"path": "bar.py", "old_str": "NOT_THERE", "new_str": "x"})
         assert result.startswith("[error]")
@@ -131,7 +131,7 @@ class TestUndoStack:
     def test_edit_pushes_undo_entry(self, tmp_path: Path) -> None:
         session, registry = self._make_session(tmp_path)
         f = tmp_path / "a.py"
-        f.write_text("x = 1\n")
+        f.write_text("x = 1\n", encoding="utf-8")
         registry.call("edit_file", {"path": "a.py", "old_str": "x = 1", "new_str": "x = 2"})
         assert len(session._undo_stack) == 1
         assert session._undo_stack[0]["path"] == "a.py"
@@ -145,29 +145,29 @@ class TestUndoStack:
     def test_write_overwrite_pushes_undo_with_original(self, tmp_path: Path) -> None:
         session, registry = self._make_session(tmp_path)
         f = tmp_path / "cfg.py"
-        f.write_text("OLD\n")
+        f.write_text("OLD\n", encoding="utf-8")
         registry.call("write_file", {"path": "cfg.py", "content": "NEW\n"})
         assert session._undo_stack[-1]["before"] == "OLD\n"
 
     def test_failed_edit_does_not_push_undo(self, tmp_path: Path) -> None:
         session, registry = self._make_session(tmp_path)
         f = tmp_path / "x.py"
-        f.write_text("a = 1\n")
+        f.write_text("a = 1\n", encoding="utf-8")
         registry.call("edit_file", {"path": "x.py", "old_str": "NOT_THERE", "new_str": "y"})
         assert len(session._undo_stack) == 0
 
     def test_undo_restores_file(self, tmp_path: Path) -> None:
         session, registry = self._make_session(tmp_path)
         f = tmp_path / "b.py"
-        f.write_text("original\n")
+        f.write_text("original\n", encoding="utf-8")
         registry.call("edit_file", {"path": "b.py", "old_str": "original", "new_str": "changed"})
-        assert f.read_text() == "changed\n"
+        assert f.read_text(encoding="utf-8") == "changed\n"
 
         # Simulate /undo
         entry = session._undo_stack.pop()
         path, before = entry["path"], entry["before"]
-        (session._project_root / path).write_text(before)
-        assert f.read_text() == "original\n"
+        (session._project_root / path).write_text(before, encoding="utf-8")
+        assert f.read_text(encoding="utf-8") == "original\n"
 
     def test_undo_new_file_deletes_it(self, tmp_path: Path) -> None:
         session, registry = self._make_session(tmp_path)
@@ -184,7 +184,7 @@ class TestUndoStack:
         session, registry = self._make_session(tmp_path)
         for i in range(25):
             f = tmp_path / "x.py"
-            f.write_text(f"v{i}\n")
+            f.write_text(f"v{i}\n", encoding="utf-8")
             registry.call("edit_file", {"path": "x.py", "old_str": f"v{i}", "new_str": f"v{i+1}"})
         assert len(session._undo_stack) == 20
 

@@ -148,7 +148,7 @@ class TestSaveMcpJsonTransports:
             url="ws://localhost:8080/mcp",
         )
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         srv = data["mcpServers"]["ws"]
         assert srv["transport"] == "websocket"
         assert srv["url"] == "ws://localhost:8080/mcp"
@@ -162,7 +162,7 @@ class TestSaveMcpJsonTransports:
             headers={"Authorization": "Bearer tok"},
         )
         save_mcp_json(tmp_path, [entry])
-        data = json.loads((tmp_path / ".mcp.json").read_text())
+        data = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
         srv = data["mcpServers"]["sse"]
         assert srv["headers"] == {"Authorization": "Bearer tok"}
 
