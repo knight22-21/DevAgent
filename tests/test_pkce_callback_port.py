@@ -20,12 +20,30 @@ from devagent.mcp.auth import pkce
 
 
 def _probe_bind(port: int) -> None:
-    """Try to take *port* the way an unrelated process would."""
+    """Try to take *port* the way an unrelated process would, without round trips."""
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         probe.bind(("127.0.0.1", port))
     finally:
         probe.close()
+
+
+def _nothing_is_listening(port: int) -> bool:
+    """Whether a fresh connection to *port* is refused, i.e. no server holds it.
+
+    A refused connection is the fact under test -- once the flow returns (or once
+    ``server_close()`` has run) nothing may be listening on the callback port.
+    Probing with a ``bind`` measures something else, and on Linux it measures it
+    wrongly: the port is also unbindable -- even with ``SO_REUSEADDR`` -- while the
+    connection the last run accepted lingers (the client never closed its end), and
+    that is not the server still holding the port. A connect to a port with no
+    listener is refused whatever state the old connection is in, on either OS.
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return False
+    except OSError:
+        return True
 
 
 class TestThePortIsHeld:
@@ -78,8 +96,7 @@ class TestThePortIsHeld:
         server.shutdown()
         server.server_close()
 
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.bind(("127.0.0.1", port))  # must not raise
+        assert _nothing_is_listening(port)
 
 
 class TestTheFlowUsesThatSocket:
@@ -91,7 +108,8 @@ class TestTheFlowUsesThatSocket:
             query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
             seen["redirect_uri"] = query["redirect_uri"]
             # stand in for the browser following the provider's redirect
-            urllib.request.urlopen(f"{query['redirect_uri']}?code=CODE123", timeout=5).read()
+            with urllib.request.urlopen(f"{query['redirect_uri']}?code=CODE123", timeout=5) as resp:
+                resp.read()
 
         def fake_exchange(token_url, client_id, code, verifier, redirect_uri):
             return {"access_token": "t", "code": code, "redirect_uri": redirect_uri}
@@ -117,7 +135,8 @@ class TestTheFlowUsesThatSocket:
         def fake_open(url: str) -> None:
             query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
             held["port"] = int(urllib.parse.urlparse(query["redirect_uri"]).port)
-            urllib.request.urlopen(f"{query['redirect_uri']}?code=C", timeout=5).read()
+            with urllib.request.urlopen(f"{query['redirect_uri']}?code=C", timeout=5) as resp:
+                resp.read()
 
         monkeypatch.setattr(pkce.webbrowser, "open", fake_open)
         monkeypatch.setattr(pkce, "_exchange_code", lambda *a, **k: {"access_token": "t"})
@@ -130,5 +149,4 @@ class TestTheFlowUsesThatSocket:
             timeout=10,
         )
 
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.bind(("127.0.0.1", held["port"]))  # must not raise
+        assert _nothing_is_listening(held["port"])
