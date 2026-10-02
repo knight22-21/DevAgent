@@ -315,6 +315,58 @@ def _to_anthropic_tools(tools: list[ToolDef]) -> list[dict]:
     ]
 
 
+# JSON-Schema keywords the Gemini `Schema` proto can carry. Anything else
+# (`default`, `additionalProperties`, `title`, ...) makes the SDK raise
+# `ValueError: Unknown field for Schema: <keyword>` while building the request --
+# measured against google-generativeai 0.8.x.
+_GEMINI_SCHEMA_KEYS = frozenset({
+    "type", "format", "description", "nullable", "enum",
+    "items", "properties", "required", "minItems", "maxItems",
+})
+
+# JSON Schema spells these camelCase; the proto fields are snake_case.
+_GEMINI_SCHEMA_RENAMES = {
+    "minItems": "min_items",
+    "maxItems": "max_items",
+}
+
+
+def _to_gemini_schema(schema: dict) -> dict:
+    """Reduce a JSON-Schema object to the keywords the Gemini proto supports.
+
+    The tool definitions in this project are OpenAI/Anthropic-shaped (some carry
+    `default`); Gemini's `Schema` message rejects unknown fields rather than
+    ignoring them, so unsupported keywords are dropped here instead of at the API.
+    """
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key not in _GEMINI_SCHEMA_KEYS:
+            continue
+        name = _GEMINI_SCHEMA_RENAMES.get(key, key)
+        if key == "properties" and isinstance(value, dict):
+            out[name] = {k: _to_gemini_schema(v) for k, v in value.items()}
+        elif key == "items" and isinstance(value, dict):
+            out[name] = _to_gemini_schema(value)
+        else:
+            out[name] = value
+    return out
+
+
+def _to_gemini_tools(tools: list[ToolDef]) -> list[dict]:
+    return [
+        {
+            "function_declarations": [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": _to_gemini_schema(t.parameters),
+                }
+                for t in tools
+            ]
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # LLMClient
 # ---------------------------------------------------------------------------
@@ -416,7 +468,7 @@ class LLMClient:
         elif p == "anthropic":
             return self._anthropic(messages, tools)
         elif p == "gemini":
-            return self._gemini(messages)
+            return self._gemini(messages, tools)
         else:
             raise ValueError(f"Unknown provider: {p!r}")
 
@@ -836,10 +888,14 @@ class LLMClient:
                     yield text
 
     # ------------------------------------------------------------------
-    # Gemini (no tool calling yet -- text only)
+    # Gemini
     # ------------------------------------------------------------------
 
-    def _gemini(self, messages: list[AgentMessage]) -> LLMResponse:
+    def _gemini(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolDef] | None = None,
+    ) -> LLMResponse:
         import google.generativeai as genai
 
         genai.configure(api_key=self.cfg.api_key)
@@ -849,9 +905,35 @@ class LLMClient:
             for m in messages
             if m.role != "system"
         )
-        resp = model.generate_content(prompt)
+
+        kwargs: dict[str, Any] = {}
+        if tools:
+            kwargs["tools"] = _to_gemini_tools(tools)
+
+        resp = model.generate_content(prompt, **kwargs)
+
+        # `resp.text` raises when the reply carries no text part (a pure function
+        # call does exactly that), so read the parts directly.
+        text_parts: list[str] = []
+        tool_calls: list[ToolCallRequest] = []
+        for candidate in resp.candidates:
+            for part in candidate.content.parts:
+                function_call = part.function_call
+                if function_call.name:
+                    tool_calls.append(ToolCallRequest(
+                        id=str(uuid.uuid4())[:8],
+                        name=function_call.name,
+                        args=dict(function_call.args),
+                    ))
+                elif part.text:
+                    text_parts.append(part.text)
+
+        usage = getattr(resp, "usage_metadata", None)
         return LLMResponse(
-            content=resp.text,
+            content="".join(text_parts),
+            tool_calls=tool_calls,
+            input_tokens=getattr(usage, "prompt_token_count", 0) or 0,
+            output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
             model=self.cfg.model,
             provider="gemini",
         )
