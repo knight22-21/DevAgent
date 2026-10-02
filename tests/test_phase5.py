@@ -198,7 +198,7 @@ def _make_loop_with_mocked_cp(module_summary=None, test_output="1 passed"):
     loop.system_prompt = ""
     loop._cp_client = cp
     loop._router = None
-    loop._repair_attempt = 0
+    loop._repair_attempts = {}
     loop._max_repair = MAX_REPAIR
     return loop
 
@@ -207,7 +207,7 @@ def test_auto_test_passes_returns_success_note():
     loop = _make_loop_with_mocked_cp(test_output="1 passed in 0.5s")
     note = loop._auto_test_after_write("src/foo.py")
     assert "all tests pass" in note
-    assert loop._repair_attempt == 0
+    assert loop._repair_attempts.get("src/foo.py") == 0
 
 
 def test_auto_test_fails_increments_counter():
@@ -215,13 +215,13 @@ def test_auto_test_fails_increments_counter():
     note = loop._auto_test_after_write("src/foo.py")
     assert "Tests failed" in note
     assert "attempt 1/3" in note
-    assert loop._repair_attempt == 1
+    assert loop._repair_attempts.get("src/foo.py") == 1
 
 
 def test_auto_test_max_repair_stops():
     from devagent.agent.loop import MAX_REPAIR
     loop = _make_loop_with_mocked_cp(test_output="1 failed")
-    loop._repair_attempt = MAX_REPAIR
+    loop._repair_attempts["src/foo.py"] = MAX_REPAIR
     note = loop._auto_test_after_write("src/foo.py")
     assert note == ""  # silenced at limit
 
@@ -247,18 +247,18 @@ def test_auto_test_empty_path_returns_empty():
 
 def test_auto_test_resets_counter_on_success():
     loop = _make_loop_with_mocked_cp(test_output="1 passed")
-    loop._repair_attempt = 2  # simulate prior failures
+    loop._repair_attempts["src/foo.py"] = 2  # simulate prior failures
     note = loop._auto_test_after_write("src/foo.py")
     assert "all tests pass" in note
-    assert loop._repair_attempt == 0
+    assert loop._repair_attempts.get("src/foo.py") == 0
 
 
 def test_auto_test_max_repair_warning():
     loop = _make_loop_with_mocked_cp(test_output="2 failed")
-    loop._repair_attempt = 2  # one away from limit
+    loop._repair_attempts["src/foo.py"] = 2  # one away from limit
     note = loop._auto_test_after_write("src/foo.py")
     assert "WARNING" in note or "Max repair" in note
-    assert loop._repair_attempt == 3
+    assert loop._repair_attempts.get("src/foo.py") == 3
 
 
 def test_agent_loop_stores_configured_max_repair():
@@ -296,9 +296,41 @@ def test_auto_test_honours_configured_max_repair():
     loop._max_repair = 5
     for _ in range(5):
         note = loop._auto_test_after_write("src/foo.py")
-    assert loop._repair_attempt == 5
+    assert loop._repair_attempts.get("src/foo.py") == 5
     assert "attempt 5/5" in note
     assert loop._auto_test_after_write("src/foo.py") == ""  # silenced at the configured cap
+
+
+def test_auto_test_per_file_repair_budget_isolated():
+    """Repair budget is tracked independently per file, not session-wide."""
+    loop = _make_loop_with_mocked_cp(test_output="1 failed")
+    # File A exhausts its repair budget (3 attempts)
+    for i in range(3):
+        note_a = loop._auto_test_after_write("src/file_a.py")
+        assert f"attempt {i+1}/3" in note_a
+
+    # File A is now capped
+    assert loop._auto_test_after_write("src/file_a.py") == ""
+    assert loop._repair_attempts["src/file_a.py"] == 3
+
+    # File B should have its own full budget starting at attempt 1
+    note_b = loop._auto_test_after_write("src/file_b.py")
+    assert "attempt 1/3" in note_b
+    assert loop._repair_attempts["src/file_b.py"] == 1
+    assert loop._repair_attempts["src/file_a.py"] == 3
+
+    # File C passes tests on first try -> counter is 0, does not affect A or B
+    loop.registry.register(
+        "run_shell",
+        "Run a shell command",
+        {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
+        lambda args: "1 passed in 0.2s",
+    )
+    note_c = loop._auto_test_after_write("src/file_c.py")
+    assert "all tests pass" in note_c
+    assert loop._repair_attempts["src/file_c.py"] == 0
+    assert loop._repair_attempts["src/file_a.py"] == 3
+    assert loop._repair_attempts["src/file_b.py"] == 1
 
 
 # ---------------------------------------------------------------------------
