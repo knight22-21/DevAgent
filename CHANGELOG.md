@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+**A rejected config file no longer silently becomes defaults**
+- `load_config()` wrapped model construction in `except Exception: return DevAgentConfig()`, so a misspelled enum, an out-of-range value or a wrong type was discarded without a word and the agent ran with values the user never chose
+- it now raises `ConfigError` naming the file that failed, for both an unparseable TOML file and a value that fails validation; a *missing* file still falls back to defaults, which is not an error
+- 12 tests in `tests/test_config_validation.py`
+
 ### Added
 
 **`/keybindings` REPL command (Phase 42)**

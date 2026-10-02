@@ -7,12 +7,22 @@ All config models are Pydantic models with sensible defaults.
 from __future__ import annotations
 
 import tomllib
+from pathlib import Path
 from typing import Literal
 
 import tomli_w
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from devagent.core.storage import get_config_path
+
+
+class ConfigError(RuntimeError):
+    """Raised when a configuration file exists but is unreadable, malformed or invalid.
+
+    A missing config file is not an error — defaults are used. A file that *is*
+    present and cannot be turned into a :class:`DevAgentConfig` is, because the
+    alternative is running with values the user never chose.
+    """
 
 
 class LLMFallbackConfig(BaseModel):
@@ -172,35 +182,44 @@ def load_config(project_root: str | None = None) -> DevAgentConfig:
       4. Project config   (<root>/.devagent/settings.toml)        [committed]
 
     Returns defaults when no files exist.
+
+    Raises :class:`ConfigError` when a file *is* present but cannot be parsed or
+    does not validate — a rejected config file must not silently become defaults.
     """
     merged: dict = {}
+    sources: list[Path] = []
+
+    def _merge_file(path: Path) -> None:
+        try:
+            with open(path, "rb") as f:
+                _deep_merge(merged, tomllib.load(f))
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
+        sources.append(path)
 
     # Level 2: user config
     user_path = get_config_path()
     if user_path.is_file():
-        with open(user_path, "rb") as f:
-            _deep_merge(merged, tomllib.load(f))
+        _merge_file(user_path)
 
     if project_root:
-        from pathlib import Path as _Path
-        root = _Path(project_root)
+        root = Path(project_root)
 
         # Level 3: project local (gitignored secrets / overrides)
         local_path = root / ".devagent" / "settings.local.toml"
         if local_path.is_file():
-            with open(local_path, "rb") as f:
-                _deep_merge(merged, tomllib.load(f))
+            _merge_file(local_path)
 
         # Level 4 (highest): committed project settings
         project_path = root / ".devagent" / "settings.toml"
         if project_path.is_file():
-            with open(project_path, "rb") as f:
-                _deep_merge(merged, tomllib.load(f))
+            _merge_file(project_path)
 
     try:
         return DevAgentConfig(**merged)
-    except Exception:
-        return DevAgentConfig()
+    except ValidationError as exc:
+        where = ", ".join(str(p) for p in sources) if sources else "the built-in defaults"
+        raise ConfigError(f"invalid configuration in {where}:\n{exc}") from exc
 
 
 def save_config(
