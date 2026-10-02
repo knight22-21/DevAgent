@@ -1411,7 +1411,7 @@ async def _watch_show(owner: str, repo: str, issue_number: int, cfg, project_roo
     if report_json.exists() and analysis.full_report_available:
         from devagent.core.models import GapReport
         from devagent.output.terminal import render_gap_report
-        gap_report = GapReport.model_validate_json(report_json.read_text())
+        gap_report = GapReport.model_validate_json(report_json.read_text(encoding="utf-8"))
         render_gap_report(gap_report, f"{owner}/{repo}", report_json)
     else:
         console.print(
