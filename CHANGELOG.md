@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - it now raises `ConfigError` naming the file that failed, for both an unparseable TOML file and a value that fails validation; a *missing* file still falls back to defaults, which is not an error
 - 12 tests in `tests/test_config_validation.py`
 
+**A failed `git worktree remove` no longer leaks the admin entry or the branch**
+- `isolated_worktree` ignored the exit status of `git worktree remove`; if it failed (disk error, locked file, NFS timeout) the admin entry under `.git/worktrees/` outlived the directory, so `git worktree list` kept advertising a worktree that was gone — and `git branch -D` then refused to delete the branch, "used by" that phantom worktree
+- cleanup now prunes after removing the directory (ordering matters: prune before the branch delete), and reports the failed removal on stderr instead of swallowing it
+- 4 tests in `tests/test_phase18.py` covering the failure path and a control arm for the happy path
+
 ### Added
 
 **`/keybindings` REPL command (Phase 42)**

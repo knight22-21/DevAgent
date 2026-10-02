@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 from contextlib import contextmanager
@@ -58,7 +59,22 @@ def isolated_worktree(project_root: str | Path, branch_prefix: str = "agent"):
         made_commits = (
             wt_sha_r.returncode == 0 and wt_sha_r.stdout.strip() != base_sha
         )
-        _git(["worktree", "remove", "--force", str(wt_path)], cwd=root, check=False)
+        removed = _git(["worktree", "remove", "--force", str(wt_path)], cwd=root, check=False)
+        if removed.returncode != 0:
+            # Not fatal — the directory is removed below either way — but say so:
+            # a silent failure here is exactly how the stale admin entry appears.
+            print(
+                f"warning: 'git worktree remove' failed for {wt_path}: "
+                f"{removed.stderr.strip() or removed.stdout.strip()}",
+                file=sys.stderr,
+            )
         shutil.rmtree(tmp_parent, ignore_errors=True)
+        # Always prune, after the directory is gone. If `worktree remove` failed
+        # (disk error, locked file, NFS timeout) the admin entry under
+        # .git/worktrees/ outlives the directory it points at, so `git worktree
+        # list` keeps advertising a worktree that no longer exists -- and
+        # `git branch -D` then refuses to delete the branch, because it is "used
+        # by" that phantom worktree. Pruning first fixes both leaks at once.
+        _git(["worktree", "prune"], cwd=root, check=False)
         if not made_commits:
             _git(["branch", "-D", branch], cwd=root, check=False)

@@ -125,3 +125,105 @@ class TestAgentDefIsolationField:
         defs = load_agent_defs(tmp_path)
         assert "myagent" in defs
         assert defs["myagent"].isolation == "worktree"
+
+
+# ---------------------------------------------------------------------------
+# Cleanup when `git worktree remove` fails
+# ---------------------------------------------------------------------------
+
+def _worktree_entries(root: Path) -> list[str]:
+    """`git worktree list --porcelain` entries, counted rather than path-matched.
+
+    Matching on the path spelling is unreliable on Windows: the same directory can
+    be reported as ``C:/Users/ADMINI~1/...`` (8.3 short form) in one place and
+    ``C:/Users/Administrator/...`` in another, which makes a "path not in listing"
+    assertion pass for the wrong reason.
+    """
+    out = subprocess.run(
+        ["git", "-C", str(root), "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    return [block for block in out.split("\n\n") if block.strip()]
+
+
+def _git_branches(root: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), "branch", "--list"],
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def _fail_worktree_remove(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `git worktree remove` fail while leaving every other git call real."""
+    import devagent.agent.worktree as wtmod
+
+    real_git = wtmod._git
+
+    def flaky(args, cwd, *, check=True):  # type: ignore[no-untyped-def]
+        if args[:2] == ["worktree", "remove"]:
+            return subprocess.CompletedProcess(
+                args, 1, stdout="", stderr="simulated: remove failed"
+            )
+        return real_git(args, cwd, check=check)
+
+    monkeypatch.setattr(wtmod, "_git", flaky)
+
+
+class TestCleanupWhenWorktreeRemoveFails:
+    def test_no_stale_admin_entry_after_failed_remove(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_git_repo(tmp_path)
+        _fail_worktree_remove(monkeypatch)
+
+        with isolated_worktree(tmp_path, branch_prefix="test") as (wt_path, _):
+            captured_path = wt_path
+
+        assert not captured_path.exists(), "directory should still be removed"
+        entries = _worktree_entries(tmp_path)
+        assert len(entries) == 1, (
+            f"only the main worktree should remain, got {len(entries)}:\n"
+            + "\n".join(entries)
+        )
+        assert "prunable" not in "\n".join(entries)
+
+    def test_branch_not_leaked_when_remove_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _make_git_repo(tmp_path)
+        _fail_worktree_remove(monkeypatch)
+
+        with isolated_worktree(tmp_path, branch_prefix="test") as (_, branch):
+            captured_branch = branch
+
+        # Without the prune, `git branch -D` refuses ("used by worktree at ...")
+        # and the branch survives as an orphaned ref.
+        assert captured_branch not in _git_branches(tmp_path), (
+            "with no commits the branch should be deleted even when remove failed"
+        )
+
+    def test_failure_is_reported_on_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        _make_git_repo(tmp_path)
+        _fail_worktree_remove(monkeypatch)
+
+        with isolated_worktree(tmp_path, branch_prefix="test"):
+            pass
+
+        assert "worktree remove" in capsys.readouterr().err
+
+    def test_happy_path_still_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Control: with no injected failure nothing is warned about."""
+        _make_git_repo(tmp_path)
+
+        with isolated_worktree(tmp_path, branch_prefix="test") as (wt_path, _):
+            captured_path = wt_path
+
+        assert not captured_path.exists()
+        assert "worktree remove" not in capsys.readouterr().err
+        assert len(_worktree_entries(tmp_path)) == 1
