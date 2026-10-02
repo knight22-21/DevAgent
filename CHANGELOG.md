@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - cleanup now prunes after removing the directory (ordering matters: prune before the branch delete), and reports the failed removal on stderr instead of swallowing it
 - 4 tests in `tests/test_phase18.py` covering the failure path and a control arm for the happy path
 
+**The Gemini provider no longer drops tool definitions**
+- `_dispatch` called `self._gemini(messages)`, and the provider's signature took no `tools` at all — so an iteration routed to Gemini received a plain text prompt with no tool definitions, answered in prose, and the agent loop ended the task early with an incomplete result
+- `_gemini` now forwards the tool definitions and converts `FunctionCall` parts back into `ToolCallRequest`; the reply is read from `candidates[0].content.parts` instead of `resp.text`, which raises when the reply has no text part (a pure function call has none)
+- gemini's `Schema` proto rejects unknown keywords rather than ignoring them (`ValueError: Unknown field for Schema: <keyword>`), so tool schemas are reduced to the keywords the proto carries — ten of the twenty-three shipped tool schemas include a JSON-Schema `default`, which would have raised on the first tool-using call
+- 13 tests in `tests/test_gemini_tool_calling.py`, offline: the SDK's own request builder runs for real and only the transport client is faked
+
 ### Added
 
 **`/keybindings` REPL command (Phase 42)**
