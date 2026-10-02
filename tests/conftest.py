@@ -10,7 +10,7 @@ def temp_project_dir(tmp_path: Path) -> Path:
     project.mkdir()
     
     # Create a gitignore
-    (project / ".gitignore").write_text("node_modules/\n.venv/\n__pycache__/\n")
+    (project / ".gitignore").write_text("node_modules/\n.venv/\n__pycache__/\n", encoding="utf-8")
     
     # Create main app file
     app_py = project / "app.py"
@@ -19,16 +19,17 @@ def temp_project_dir(tmp_path: Path) -> Path:
         "    print('Hello World')\n\n"
         "class AppServer:\n"
         "    def run(self):\n"
-        "        pass\n"
+        "        pass\n",
+    encoding="utf-8"
     )
     
     # Create an ignored file
     venv_dir = project / ".venv"
     venv_dir.mkdir()
-    (venv_dir / "ignored.py").write_text("def ignored(): pass")
+    (venv_dir / "ignored.py").write_text("def ignored(): pass", encoding="utf-8")
     
     # Create a non-python file
-    (project / "README.md").write_text("# Sample Project\nThis is a sample project.")
+    (project / "README.md").write_text("# Sample Project\nThis is a sample project.", encoding="utf-8")
     
     return project
 

@@ -96,7 +96,7 @@ class TestSaveLoad:
             status="running",
         )
         _save(job)
-        data = json.loads(Path(state_path).read_text())
+        data = json.loads(Path(state_path).read_text(encoding="utf-8"))
         assert data["id"] == "x"
         assert data["status"] == "running"
 

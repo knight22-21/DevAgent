@@ -287,7 +287,7 @@ def test_serve_command_importable():
 def test_ci_workflow_exists():
     ci = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
     assert ci.exists(), "ci.yml not found"
-    content = ci.read_text()
+    content = ci.read_text(encoding="utf-8")
     assert "pytest" in content
     assert "ruff" in content
 
@@ -295,7 +295,7 @@ def test_ci_workflow_exists():
 def test_publish_workflow_exists():
     pub = Path(__file__).parent.parent / ".github" / "workflows" / "publish.yml"
     assert pub.exists()
-    content = pub.read_text()
+    content = pub.read_text(encoding="utf-8")
     assert "pypi" in content.lower() or "PyPI" in content
 
 

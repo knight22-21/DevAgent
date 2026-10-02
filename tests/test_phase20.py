@@ -101,7 +101,8 @@ class TestAgentDefMemoryField:
         agents_dir = tmp_path / ".devagent" / "agents"
         agents_dir.mkdir(parents=True)
         (agents_dir / "myagent.toml").write_text(
-            'name = "myagent"\nmemory = "project"\n'
+            'name = "myagent"\nmemory = "project"\n',
+        encoding="utf-8"
         )
         defs = load_agent_defs(tmp_path)
         assert defs["myagent"].memory == "project"

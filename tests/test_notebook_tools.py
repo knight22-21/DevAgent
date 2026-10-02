@@ -27,7 +27,7 @@ def _make_notebook(cells: list[dict]) -> dict:
 
 def _write_nb(tmp_path: pathlib.Path, name: str, nb: dict) -> pathlib.Path:
     p = tmp_path / name
-    p.write_text(json.dumps(nb))
+    p.write_text(json.dumps(nb), encoding="utf-8")
     return p
 
 
