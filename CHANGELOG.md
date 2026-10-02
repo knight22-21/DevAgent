@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - cleanup now prunes after removing the directory (ordering matters: prune before the branch delete), and reports the failed removal on stderr instead of swallowing it
 - 4 tests in `tests/test_phase18.py` covering the failure path and a control arm for the happy path
 
+**The OAuth redirect port is no longer released between picking it and listening on it**
+- `_find_free_port()` bound a socket, read the port and closed it again, so any process on the machine could claim that port before the callback server bound it — the browser's redirect then landed on a port nothing was listening on and the flow died with a connection refused
+- the flow now binds the socket once (`_bind_callback_socket`) and hands it to the server, which adopts it instead of binding a port of its own; the socket is closed when the flow ends rather than staying bound for the rest of the process
+- 7 tests in `tests/test_pkce_callback_port.py`, including the end-to-end arm that follows the redirect the flow advertises
+
 ### Added
 
 **`/keybindings` REPL command (Phase 42)**
