@@ -213,7 +213,7 @@ class TestBenchReport:
         with patch("devagent.bench.report._RESULTS_DIR", tmp_path):
             path = BenchReport.save_json(results, label="test")
         assert path.exists()
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert data[0]["task_id"] == "x"
         assert data[0]["passed"] is True
 
@@ -225,14 +225,14 @@ class TestBenchReport:
 class TestCanaryJson:
     def test_canary_json_loads(self):
         canary_path = Path(__file__).parent.parent / "benchmarks" / "tasks" / "canary.json"
-        data = json.loads(canary_path.read_text())
+        data = json.loads(canary_path.read_text(encoding="utf-8"))
         assert "framework_checks" in data
         assert "fail_threshold" in data
         assert data["fail_threshold"] == pytest.approx(0.80)
 
     def test_canary_framework_checks_have_required_fields(self):
         canary_path = Path(__file__).parent.parent / "benchmarks" / "tasks" / "canary.json"
-        data = json.loads(canary_path.read_text())
+        data = json.loads(canary_path.read_text(encoding="utf-8"))
         for check in data["framework_checks"]:
             assert "id" in check
             assert "description" in check
@@ -241,7 +241,7 @@ class TestCanaryJson:
     def test_canary_framework_checks_all_pass(self):
         """All framework checks in canary.json must execute successfully."""
         canary_path = Path(__file__).parent.parent / "benchmarks" / "tasks" / "canary.json"
-        data = json.loads(canary_path.read_text())
+        data = json.loads(canary_path.read_text(encoding="utf-8"))
         failures = []
         for check in data["framework_checks"]:
             try:

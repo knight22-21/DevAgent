@@ -148,7 +148,7 @@ class TestInitProjectStatic:
         runner = CliRunner()
         result = runner.invoke(app, ["init-project", str(tmp_path)])
         assert result.exit_code != 0
-        assert (tmp_path / "DEVAGENT.md").read_text() == "existing"
+        assert (tmp_path / "DEVAGENT.md").read_text(encoding="utf-8") == "existing"
 
     def test_force_overwrites(self, tmp_path: Path) -> None:
         from typer.testing import CliRunner
@@ -158,7 +158,7 @@ class TestInitProjectStatic:
         runner = CliRunner()
         result = runner.invoke(app, ["init-project", str(tmp_path), "--force"])
         assert result.exit_code == 0
-        assert (tmp_path / "DEVAGENT.md").read_text() != "existing"
+        assert (tmp_path / "DEVAGENT.md").read_text(encoding="utf-8") != "existing"
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ class TestInitProjectGenerate:
             result = runner.invoke(app, ["init-project", str(tmp_path), "--generate"])
 
         assert result.exit_code == 0
-        text = (tmp_path / "DEVAGENT.md").read_text()
+        text = (tmp_path / "DEVAGENT.md").read_text(encoding="utf-8")
         assert "Python 3.12" in text
 
     def test_generate_falls_back_on_llm_error(self, tmp_path: Path) -> None:

@@ -48,7 +48,7 @@ class TestAgentMemoryReadWrite:
         pm = ProjectMemory.for_agent(tmp_path, "agent-x")
         pm.upsert("key", "value")
         assert pm.path.exists()
-        assert "key: value" in pm.path.read_text()
+        assert "key: value" in pm.path.read_text(encoding="utf-8")
 
     def test_upsert_and_load_round_trip(self, tmp_path: Path) -> None:
         from devagent.session.project_memory import ProjectMemory
