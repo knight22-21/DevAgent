@@ -158,7 +158,7 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self._cp_client = codeprism_client
         self._router = router
-        self._repair_attempt = 0  # consecutive test-repair attempts after a write
+        self._repair_attempts: dict[str, int] = {}  # test-repair attempts per file after write
         self._max_iterations = max_iterations if max_iterations > 0 else _DEFAULT_MAX_ITERATIONS
         self._max_repair = MAX_REPAIR if max_repair is None else max(0, max_repair)
         self._loop_detection = loop_detection
@@ -394,7 +394,8 @@ class AgentLoop:
         """
         if not self._cp_client or not file_path:
             return ""
-        if self._repair_attempt >= self._max_repair:
+        current_attempts = self._repair_attempts.get(file_path, 0)
+        if current_attempts >= self._max_repair:
             return ""
 
         try:
@@ -415,14 +416,15 @@ class AgentLoop:
         passed = "passed" in low and "failed" not in low and "error" not in low
 
         if passed:
-            self._repair_attempt = 0
+            self._repair_attempts[file_path] = 0
             return f"\n\n[auto_test] {test_file}: all tests pass."
 
-        self._repair_attempt += 1
-        remaining = self._max_repair - self._repair_attempt
+        current_attempts += 1
+        self._repair_attempts[file_path] = current_attempts
+        remaining = self._max_repair - current_attempts
         note = (
             f"\n\n[auto_test] Tests failed after your edit "
-            f"(attempt {self._repair_attempt}/{self._max_repair}):\n"
+            f"(attempt {current_attempts}/{self._max_repair}):\n"
             f"Test file: {test_file}\n"
             f"Output:\n{test_result[:600]}"
         )
