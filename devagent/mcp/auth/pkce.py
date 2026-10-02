@@ -26,6 +26,7 @@ import hashlib
 import http.server
 import json
 import secrets
+import socket
 import threading
 import urllib.parse
 import urllib.request
@@ -87,19 +88,39 @@ def _make_handler(result: _CallbackResult):  # type: ignore[return]
     return _Handler
 
 
-def _start_callback_server(port: int) -> tuple[http.server.HTTPServer, _CallbackResult]:
+def _start_callback_server(sock: socket.socket) -> tuple[http.server.HTTPServer, _CallbackResult]:
+    """Serve on *sock*, which must already be bound to the redirect address.
+
+    The socket is handed over rather than looked up again: the port is never free
+    between picking it and listening on it, so another process cannot claim it in
+    that window and leave the browser's redirect with nothing to connect to.
+    """
     result = _CallbackResult()
-    server = http.server.HTTPServer(("127.0.0.1", port), _make_handler(result))
+    server = http.server.HTTPServer(
+        sock.getsockname(), _make_handler(result), bind_and_activate=False
+    )
+    server.socket = sock
+    server.server_activate()  # listen() on the socket we already hold
+    server.server_name = "127.0.0.1"
+    server.server_port = sock.getsockname()[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, result
 
 
-def _find_free_port() -> int:
-    import socket
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _bind_callback_socket() -> socket.socket:
+    """Bind a loopback socket on an ephemeral port and keep it open.
+
+    The caller reads the port off this socket for the redirect URI and passes the
+    same socket to :func:`_start_callback_server` once the browser is on its way.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+    except OSError:
+        sock.close()
+        raise
+    return sock
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +173,8 @@ def pkce_authorize(
     """
     verifier = generate_code_verifier()
     challenge = compute_code_challenge(verifier)
-    port = _find_free_port()
+    callback_sock = _bind_callback_socket()
+    port = callback_sock.getsockname()[1]
     redirect_uri = f"http://127.0.0.1:{port}/callback"
 
     params = {
@@ -166,7 +188,7 @@ def pkce_authorize(
     }
     auth_url = f"{authorization_url}?{urllib.parse.urlencode(params)}"
 
-    server, result = _start_callback_server(port)
+    server, result = _start_callback_server(callback_sock)
     try:
         webbrowser.open(auth_url)
         if not result.done.wait(timeout=timeout):
@@ -176,6 +198,7 @@ def pkce_authorize(
         return _exchange_code(token_url, client_id, result.code, verifier, redirect_uri)
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def refresh_token_flow(
