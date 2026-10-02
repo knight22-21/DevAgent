@@ -26,6 +26,7 @@ class BackgroundJob:
     state_path: str
     started_at: float
     status: str = "running"   # running | done | failed | unknown
+    exit_code: int | None = None
 
 
 def _state_dir(project_root: str | Path) -> Path:
@@ -68,9 +69,21 @@ def launch(
     state_d = _state_dir(project_root)
     log_path = str(state_d / f"bg_{job_id}.log")
     state_path = str(state_d / f"bg_{job_id}.json")
+    exit_path = str(state_d / f"bg_{job_id}.exit")
     py = python or sys.executable
 
-    cmd = [py, "-m", "devagent", "do", task, "--output-format", "stream-json"]
+    # The runner journals the child's exit code next to the state file so
+    # that poll() can tell done from failed once the PID is gone.
+    cmd = [
+        py,
+        "-m",
+        "devagent.background.runner",
+        exit_path,
+        "do",
+        task,
+        "--output-format",
+        "stream-json",
+    ]
 
     with open(log_path, "w", encoding="utf-8") as log_fh:
         if os.name == "nt":
@@ -116,10 +129,32 @@ def _load(state_path: str | Path) -> BackgroundJob:
     return BackgroundJob(**data)
 
 
+def _read_exit_code(job: BackgroundJob) -> int | None:
+    """Return the journaled exit code, or None when there is no journal.
+
+    Jobs launched before the runner existed, and children killed outright
+    (e.g. SIGKILL before the runner's finally block), have no journal.
+    """
+    p = Path(job.state_path).with_suffix(".exit")
+    try:
+        return int(p.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def poll(job: BackgroundJob) -> BackgroundJob:
     """Refresh and persist the job's status from the OS."""
     if job.status == "running":
-        job.status = "running" if _is_running(job.pid) else "done"
+        if _is_running(job.pid):
+            job.status = "running"
+        else:
+            job.exit_code = _read_exit_code(job)
+            if job.exit_code is None:
+                job.status = "unknown"
+            elif job.exit_code == 0:
+                job.status = "done"
+            else:
+                job.status = "failed"
         _save(job)
     return job
 

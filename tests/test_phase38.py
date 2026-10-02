@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -119,7 +121,7 @@ class TestPoll:
         updated = poll(job)
         assert updated.status == "running"
 
-    def test_dead_pid_marked_done(self, tmp_path) -> None:
+    def test_dead_pid_with_zero_exit_marked_done(self, tmp_path) -> None:
         from devagent.background.jobs import BackgroundJob, _save, poll
         state_path = str(tmp_path / "bg_dead.json")
         log_path = str(tmp_path / "bg_dead.log")
@@ -133,8 +135,47 @@ class TestPoll:
             status="running",
         )
         _save(job)
+        Path(state_path).with_suffix(".exit").write_text("0", encoding="utf-8")
         updated = poll(job)
         assert updated.status == "done"
+        assert updated.exit_code == 0
+
+    def test_dead_pid_with_nonzero_exit_marked_failed(self, tmp_path) -> None:
+        from devagent.background.jobs import BackgroundJob, _save, poll
+        state_path = str(tmp_path / "bg_crash.json")
+        log_path = str(tmp_path / "bg_crash.log")
+        job = BackgroundJob(
+            id="crash1",
+            task="t",
+            pid=999999,
+            log_path=log_path,
+            state_path=state_path,
+            started_at=time.time(),
+            status="running",
+        )
+        _save(job)
+        Path(state_path).with_suffix(".exit").write_text("1", encoding="utf-8")
+        updated = poll(job)
+        assert updated.status == "failed"
+        assert updated.exit_code == 1
+
+    def test_dead_pid_without_journal_marked_unknown(self, tmp_path) -> None:
+        from devagent.background.jobs import BackgroundJob, _save, poll
+        state_path = str(tmp_path / "bg_lost.json")
+        log_path = str(tmp_path / "bg_lost.log")
+        job = BackgroundJob(
+            id="lost1",
+            task="t",
+            pid=999999,
+            log_path=log_path,
+            state_path=state_path,
+            started_at=time.time(),
+            status="running",
+        )
+        _save(job)
+        updated = poll(job)
+        assert updated.status == "unknown"
+        assert updated.exit_code is None
 
     def test_already_done_not_rechecked(self, tmp_path) -> None:
         from devagent.background.jobs import BackgroundJob, _save, poll
@@ -151,6 +192,30 @@ class TestPoll:
         _save(job)
         updated = poll(job)
         assert updated.status == "done"
+
+
+class TestRunner:
+    def test_runner_journals_zero_exit(self, tmp_path) -> None:
+        exit_file = tmp_path / "j0.exit"
+        r = subprocess.run(
+            [sys.executable, "-m", "devagent.background.runner", str(exit_file), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert r.returncode == 0
+        assert exit_file.read_text(encoding="utf-8") == "0"
+
+    def test_runner_journals_nonzero_exit(self, tmp_path) -> None:
+        exit_file = tmp_path / "j1.exit"
+        r = subprocess.run(
+            [sys.executable, "-m", "devagent.background.runner", str(exit_file), "definitely-not-a-command"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert r.returncode != 0
+        assert exit_file.read_text(encoding="utf-8") != "0"
 
 
 class TestListJobs:
