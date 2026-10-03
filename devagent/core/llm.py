@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -119,29 +120,39 @@ class _TokenBucket:
         self.tokens = float(tokens_per_minute)
         self.fill_rate = tokens_per_minute / 60.0
         self.last_update = time.monotonic()
-        self._lock = asyncio.Lock()
+        # One limiter is shared by every worker (module-level `_groq_limiter`),
+        # and workers are threads (see devagent/agent/worker.py). A threading
+        # lock is the primitive that serialises both call paths; an asyncio.Lock
+        # cannot guard the synchronous acquire() at all.
+        self._tlock = threading.Lock()
 
     def _update(self) -> None:
         now = time.monotonic()
         self.tokens = min(self.capacity, self.tokens + (now - self.last_update) * self.fill_rate)
         self.last_update = now
 
-    def acquire(self) -> None:
-        while True:
+    def _take_or_wait(self) -> float | None:
+        """Consume a token under the lock, or return how long until one is due."""
+        with self._tlock:
             self._update()
             if self.tokens >= 1:
                 self.tokens -= 1
+                return None
+            return (1 - self.tokens) / self.fill_rate
+
+    def acquire(self) -> None:
+        while True:
+            wait = self._take_or_wait()
+            if wait is None:
                 return
-            time.sleep(1 / self.fill_rate)
+            time.sleep(wait)
 
     async def aacquire(self) -> None:
         while True:
-            async with self._lock:
-                self._update()
-                if self.tokens >= 1:
-                    self.tokens -= 1
-                    return
-            await asyncio.sleep(1 / self.fill_rate)
+            wait = self._take_or_wait()
+            if wait is None:
+                return
+            await asyncio.sleep(wait)
 
 
 _groq_limiter = _TokenBucket(30)
