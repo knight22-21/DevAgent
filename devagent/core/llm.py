@@ -971,5 +971,8 @@ def get_llm_for_task(config: DevAgentConfig, task: str) -> LLMClient:
         base_url=config.llm.base_url,
         temperature=config.llm.temperature,
         api_key=config.llm.api_key,
+        effort=config.llm.effort,
+        extended_thinking=config.llm.extended_thinking,
+        thinking_budget_tokens=config.llm.thinking_budget_tokens,
     )
     return LLMClient(routed_cfg)

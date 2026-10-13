@@ -345,6 +345,19 @@ def test_router_config_inherits_api_key():
     assert client.cfg.api_key == "sk-test-key"
 
 
+def test_router_config_inherits_effort_and_thinking():
+    """get_llm_for_task keeps effort / extended-thinking settings from the main llm config."""
+    from devagent.core.llm import get_llm_for_task
+    cfg = _make_config(provider="anthropic", model="claude-3-haiku", api_key="sk-test-key")
+    cfg.llm.effort = "max"
+    cfg.llm.extended_thinking = True
+    cfg.llm.thinking_budget_tokens = 4_000
+    client = get_llm_for_task(cfg, "coding")
+    assert client.cfg.effort == "max"
+    assert client.cfg.extended_thinking is True
+    assert client.cfg.thinking_budget_tokens == 4_000
+
+
 def test_router_config_fallback_on_unknown_task():
     """Unknown task falls back to RouterConfig.fallback."""
     from devagent.core.router import MultiModelRouter
