@@ -10,15 +10,134 @@ httpx and optionally strips HTML tags to plain text.
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urljoin
+
+import httpx
 
 _DEFAULT_UA = "DevAgent/0.5 (https://github.com/knight22-21/DevAgent)"
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 _MAX_FETCH_CHARS = 8_000   # cap fetch_url text output
+_MAX_FETCH_REDIRECTS = 5
+_FETCH_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+FETCH_URL_ALLOWED_SCHEMES = frozenset({"http", "https"})
+_IPV4_COMPATIBLE_PREFIX = ipaddress.IPv6Network("::/96")
+_NAT64_WELL_KNOWN_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
 _SKIP_TAGS = frozenset({"script", "style", "head", "noscript", "nav", "footer"})
 _BLOCK_TAGS = frozenset({"p", "br", "div", "li", "h1", "h2", "h3", "h4", "h5", "tr", "dt", "dd"})
+
+
+def _resolve_public_addresses(
+    url: httpx.URL,
+) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    host = url.host
+    if "%" in host:
+        raise ValueError("Scoped IP addresses are not allowed")
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        port = url.port or (443 if url.scheme == "https" else 80)
+        records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = []
+        for record in records:
+            address = record[4][0]
+            if not isinstance(address, str):
+                raise TypeError("DNS resolution returned an invalid address")
+            if "%" in address:
+                raise ValueError("Scoped IP addresses are not allowed")
+            parsed_address = ipaddress.ip_address(address)
+            if parsed_address not in addresses:
+                addresses.append(parsed_address)
+
+    if not addresses:
+        raise ValueError(f"URL host did not resolve: {host}")
+    if any(not _is_public_address(address) for address in addresses):
+        raise ValueError(f"URL host resolves to a non-public address: {host}")
+    return addresses
+
+
+def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return address.ipv4_mapped.is_global
+        if (
+            address in _IPV4_COMPATIBLE_PREFIX
+            or address.sixtofour is not None
+            or address.teredo is not None
+        ):
+            return False
+        if address in _NAT64_WELL_KNOWN_PREFIX:
+            embedded_ipv4 = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+            return embedded_ipv4.is_global
+    return address.is_global
+
+
+def _fetch_url_response(
+    url: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> httpx.Response:
+    current_url = httpx.URL(url)
+    redirects = 0
+
+    with httpx.Client(
+        transport=transport,
+        timeout=20.0,
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        while True:
+            if current_url.scheme not in FETCH_URL_ALLOWED_SCHEMES:
+                raise ValueError("Only HTTP and HTTPS URLs can be fetched")
+            if not current_url.host or current_url.userinfo:
+                raise ValueError("URL must have a host and cannot include credentials")
+
+            addresses = _resolve_public_addresses(current_url)
+            extensions: dict[str, Any] = {}
+            try:
+                ipaddress.ip_address(current_url.host)
+            except ValueError:
+                if current_url.scheme == "https":
+                    extensions["sni_hostname"] = current_url.host
+
+            response: httpx.Response | None = None
+            last_connect_error: httpx.TransportError | None = None
+            for address in addresses:
+                # Pin each attempt to a validated IP while preserving DNS fallback behavior.
+                request = client.build_request(
+                    "GET",
+                    current_url.copy_with(host=address.compressed),
+                    headers={
+                        "User-Agent": _DEFAULT_UA,
+                        "Host": current_url.netloc.decode("ascii"),
+                    },
+                    extensions=extensions,
+                )
+                try:
+                    response = client.send(request, follow_redirects=False)
+                except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                    last_connect_error = exc
+                    continue
+                break
+            if response is None:
+                assert last_connect_error is not None
+                raise last_connect_error
+
+            location = response.headers.get("location")
+            if response.status_code not in _FETCH_REDIRECT_STATUSES or location is None:
+                response.raise_for_status()
+                return response
+
+            response.close()
+            if redirects >= _MAX_FETCH_REDIRECTS:
+                raise ValueError(f"Too many redirects (maximum {_MAX_FETCH_REDIRECTS})")
+            current_url = httpx.URL(urljoin(str(current_url), location))
+            redirects += 1
 
 
 # ---------------------------------------------------------------------------
@@ -151,14 +270,7 @@ def register_web_tools(
             return "[error] url is required"
         extract_text = args.get("extract_text", True)
         try:
-            import httpx
-            resp = httpx.get(
-                url,
-                headers={"User-Agent": _DEFAULT_UA},
-                timeout=20.0,
-                follow_redirects=True,
-            )
-            resp.raise_for_status()
+            resp = _fetch_url_response(url)
         except Exception as exc:
             return f"[error] fetch failed: {exc}"
 
