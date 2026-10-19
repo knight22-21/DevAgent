@@ -575,15 +575,17 @@ class LLMClient:
         except Exception:
             return []
 
-    def _ollama_client(self) -> ollama.Client:
-        """Return an ollama.Client configured for local or Ollama Cloud.
+    def _ollama_connection_options(self) -> dict[str, Any]:
+        """Connection options shared by the sync and async Ollama clients.
+
+        One builder for both: the two clients serve the same config from
+        different call sites, so anything that made only one of them differ
+        would send part of a conversation to a different endpoint.
 
         Cloud is detected when api_key is set, or when base_url is not the
         default localhost address.  Cloud requests use https://ollama.com as
         the host and pass the key as an Authorization: Bearer header.
         """
-        import ollama
-
         _LOCAL_DEFAULT = "http://localhost:11434"
         base_url = self.cfg.base_url or _LOCAL_DEFAULT
         api_key = self.cfg.api_key or ""
@@ -591,13 +593,27 @@ class LLMClient:
         # Cloud: explicit key always wins; non-default URL is also cloud-like.
         if api_key:
             host = base_url if base_url != _LOCAL_DEFAULT else "https://ollama.com"
-            return ollama.Client(
-                host=host,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+            return {"host": host, "headers": {"Authorization": f"Bearer {api_key}"}}
         if base_url != _LOCAL_DEFAULT:
-            return ollama.Client(host=base_url)
-        return ollama.Client()
+            return {"host": base_url}
+        return {}
+
+    def _ollama_client(self) -> ollama.Client:
+        """Return an ollama.Client configured for local or Ollama Cloud."""
+        import ollama
+
+        return ollama.Client(**self._ollama_connection_options())
+
+    def _ollama_async_client(self) -> ollama.AsyncClient:
+        """Return an ollama.AsyncClient with the same configuration.
+
+        ``AsyncClient`` performs its reads on the running event loop's IO
+        layer, which is what the streaming path needs: the sync client returns
+        a generator whose every ``next()`` blocks.
+        """
+        import ollama
+
+        return ollama.AsyncClient(**self._ollama_connection_options())
 
     def _ollama(self, messages: list[AgentMessage], tools: list[ToolDef] | None) -> LLMResponse:
 
@@ -686,7 +702,15 @@ class LLMClient:
         messages: list[AgentMessage],
         tools: list[ToolDef] | None = None,
     ) -> AsyncIterator[str]:
-        client = self._ollama_client()
+        """Stream assistant text from Ollama without blocking the event loop.
+
+        ``ollama.Client.chat(stream=True)`` returns a *synchronous* generator:
+        each ``next()`` blocks until the next network read returns.  Iterating
+        it inside an ``async def`` therefore froze the loop for the length of
+        the stream (issue #103).  ``AsyncClient`` returns an async iterator for
+        the same request, so every chunk is awaited instead.
+        """
+        client = self._ollama_async_client()
         kwargs: dict[str, Any] = {
             "model": self.cfg.model,
             "messages": _to_ollama_messages(messages),
@@ -696,7 +720,7 @@ class LLMClient:
         if tools:
             kwargs["tools"] = _to_openai_tools(tools)
 
-        for chunk in client.chat(**kwargs):
+        async for chunk in await client.chat(**kwargs):
             text = chunk.message.content
             if text:
                 yield text
