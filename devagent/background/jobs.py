@@ -37,6 +37,8 @@ def _state_dir(project_root: str | Path) -> Path:
 
 def _is_running(pid: int) -> bool:
     """Return True if the process with the given PID is still alive."""
+    if pid <= 0:
+        return False
     try:
         if os.name == "nt":
             import ctypes

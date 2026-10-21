@@ -79,3 +79,130 @@ def test_launch_log_file_is_utf8(tmp_path: Path, monkeypatch):
     text = Path(job.log_path).read_bytes().decode("utf-8")
     assert "分析完成: 找到 3 个 issue 🚀" in text
     assert "error: 路径不存在" in text
+
+
+def test_is_running_invalid_pid():
+    from devagent.background.jobs import _is_running
+    assert _is_running(0) is False
+    assert _is_running(-1) is False
+    assert _is_running(-999) is False
+
+
+def test_launch_creates_state_and_log_files(tmp_path: Path, monkeypatch):
+    class FakeProc:
+        pid = 9999
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: FakeProc())
+
+    job = launch("echo hello", tmp_path)
+    assert Path(job.log_path).exists()
+    assert Path(job.state_path).exists()
+
+    state = json.loads(Path(job.state_path).read_text(encoding="utf-8"))
+    assert state["id"] == job.id
+    assert state["task"] == "echo hello"
+    assert state["pid"] == 9999
+    assert state["status"] == "running"
+
+
+def test_poll_running_process(tmp_path: Path, monkeypatch):
+    from devagent.background.jobs import poll
+
+    job = _sample_job(str(tmp_path / "bg_t1.json"))
+    _save(job)
+
+    monkeypatch.setattr("devagent.background.jobs._is_running", lambda pid: True)
+    polled = poll(job)
+    assert polled.status == "running"
+    assert polled.exit_code is None
+
+
+def test_poll_exit_zero(tmp_path: Path, monkeypatch):
+    from devagent.background.jobs import poll
+
+    job = _sample_job(str(tmp_path / "bg_t1.json"))
+    _save(job)
+    # Write exit code 0 to companion .exit file
+    Path(tmp_path / "bg_t1.exit").write_text("0\n", encoding="utf-8")
+
+    monkeypatch.setattr("devagent.background.jobs._is_running", lambda pid: False)
+    polled = poll(job)
+    assert polled.status == "done"
+    assert polled.exit_code == 0
+
+    reloaded = _load(job.state_path)
+    assert reloaded.status == "done"
+    assert reloaded.exit_code == 0
+
+
+def test_poll_exit_nonzero(tmp_path: Path, monkeypatch):
+    from devagent.background.jobs import poll
+
+    job = _sample_job(str(tmp_path / "bg_t1.json"))
+    _save(job)
+    # Write exit code 1 to companion .exit file
+    Path(tmp_path / "bg_t1.exit").write_text("1\n", encoding="utf-8")
+
+    monkeypatch.setattr("devagent.background.jobs._is_running", lambda pid: False)
+    polled = poll(job)
+    assert polled.status == "failed"
+    assert polled.exit_code == 1
+
+
+def test_poll_exit_no_journal(tmp_path: Path, monkeypatch):
+    from devagent.background.jobs import poll
+
+    job = _sample_job(str(tmp_path / "bg_t1.json"))
+    _save(job)
+    # No .exit file written
+
+    monkeypatch.setattr("devagent.background.jobs._is_running", lambda pid: False)
+    polled = poll(job)
+    assert polled.status == "unknown"
+    assert polled.exit_code is None
+
+
+def test_list_jobs_empty(tmp_path: Path):
+    from devagent.background.jobs import list_jobs
+    assert list_jobs(tmp_path) == []
+
+
+def test_list_jobs_mixed(tmp_path: Path, monkeypatch):
+    from devagent.background.jobs import list_jobs
+
+    d = tmp_path / ".devagent"
+    d.mkdir(parents=True)
+
+    job1 = BackgroundJob(
+        id="j1",
+        task="task 1",
+        pid=101,
+        log_path=str(d / "bg_j1.log"),
+        state_path=str(d / "bg_j1.json"),
+        started_at=100.0,
+        status="running",
+    )
+    job2 = BackgroundJob(
+        id="j2",
+        task="task 2",
+        pid=102,
+        log_path=str(d / "bg_j2.log"),
+        state_path=str(d / "bg_j2.json"),
+        started_at=200.0,
+        status="running",
+    )
+    _save(job1)
+    _save(job2)
+    (d / "bg_j2.exit").write_text("0\n", encoding="utf-8")
+
+    def mock_is_running(pid):
+        return pid == 101
+
+    monkeypatch.setattr("devagent.background.jobs._is_running", mock_is_running)
+
+    jobs = list_jobs(tmp_path)
+    assert len(jobs) == 2
+    by_id = {j.id: j for j in jobs}
+    assert by_id["j1"].status == "running"
+    assert by_id["j2"].status == "done"
+
