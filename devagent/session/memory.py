@@ -6,6 +6,7 @@ so the agent always has relevant context without bloating the main conversation.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -33,22 +34,25 @@ class MemoryBlock:
         self._project_memory = project_memory
         self._cache: dict[str, Any] = {}
         self._loaded = False
+        self._load_lock = threading.Lock()
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:
-            self._cache = store.get_memory(
-                self.session_id, scope="session", db_path=self.db_path
-            )
-            # Merge project-level facts (file wins for keys not already in SQLite)
-            if self._project_memory is not None:
-                for key, value in self._project_memory.load().items():
-                    if key not in self._cache:
-                        store.upsert_memory(
-                            self.session_id, key, value,
-                            scope="session", db_path=self.db_path
-                        )
-                        self._cache[key] = value
-            self._loaded = True
+            with self._load_lock:
+                if not self._loaded:
+                    self._cache = store.get_memory(
+                        self.session_id, scope="session", db_path=self.db_path
+                    )
+                    # Merge project-level facts (file wins for keys not already in SQLite)
+                    if self._project_memory is not None:
+                        for key, value in self._project_memory.load().items():
+                            if key not in self._cache:
+                                store.upsert_memory(
+                                    self.session_id, key, value,
+                                    scope="session", db_path=self.db_path
+                                )
+                                self._cache[key] = value
+                    self._loaded = True
 
     def set(self, key: str, value: Any, item_type: str = "fact") -> None:
         store.upsert_memory(

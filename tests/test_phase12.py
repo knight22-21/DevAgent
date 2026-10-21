@@ -225,3 +225,52 @@ class TestMemoryBlockProjectMemory:
         block = mb.as_prompt_block()
         assert "framework" in block
         assert "FastAPI" in block
+
+    def test_ensure_loaded_concurrent_single_load(
+        self, pm: ProjectMemory, db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concurrent calls to _ensure_loaded() only load memory once (issue #102)."""
+        import threading
+        import time
+
+        pm.save({"project_key": "val"})
+        sid = _new_session_id()
+        mb = MemoryBlock(sid, db_path=db, project_memory=pm)
+
+        real_get_memory = store.get_memory
+        get_memory_calls = 0
+        load_calls = 0
+
+        def slow_get_memory(*args, **kwargs):
+            nonlocal get_memory_calls
+            get_memory_calls += 1
+            time.sleep(0.05)
+            return real_get_memory(*args, **kwargs)
+
+        real_pm_load = pm.load
+
+        def slow_pm_load(*args, **kwargs):
+            nonlocal load_calls
+            load_calls += 1
+            time.sleep(0.05)
+            return real_pm_load(*args, **kwargs)
+
+        monkeypatch.setattr(store, "get_memory", slow_get_memory)
+        monkeypatch.setattr(pm, "load", slow_pm_load)
+
+        barrier = threading.Barrier(2)
+
+        def worker() -> None:
+            barrier.wait()
+            mb.get("project_key")
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert mb.get("project_key") == "val"
+        assert get_memory_calls == 1
+        assert load_calls == 1
