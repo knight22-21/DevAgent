@@ -19,7 +19,7 @@ from devagent.core.storage import get_sessions_db_path
 
 def _conn(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or get_sessions_db_path()
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -228,6 +228,7 @@ def append_event(
     """Append one event; returns its seq number."""
     now = time.time()
     with _conn(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         cur = conn.execute(
             "SELECT COALESCE(MAX(seq), -1) + 1 FROM events WHERE session_id = ?",
             (session_id,),
