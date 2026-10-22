@@ -37,10 +37,15 @@ from devagent.core.url_parser import InvalidGitHubURLError, format_repo_string, 
 
 app = typer.Typer(
     name="devagent",
-    help="DevAgent â€” AI development agent for specification-to-code implementation.",
+    help="DevAgent - AI development agent for specification-to-code implementation.",
     add_completion=False,
     rich_markup_mode="rich",
 )
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 console = Console()
 
@@ -85,13 +90,13 @@ def _handle_error(exc: Exception) -> None:
 
     body = f"[red bold]{error_msg}[/red bold]"
     if hint:
-        body += f"\n\n[yellow]ðŸ’¡ {hint}[/yellow]"
+        body += f"\n\n[yellow][HINT] {hint}[/yellow]"
 
     if _verbose:
         body += f"\n\n[dim]{traceback.format_exc()}[/dim]"
 
     console.print(
-        Panel(body, title="âŒ Error", border_style="red")
+        Panel(body, title="FAIL Error", border_style="red")
     )
     raise typer.Exit(1)
 
@@ -248,14 +253,14 @@ def _check_command(cmd: list[str]) -> tuple[bool, str]:
 
 @app.command()
 def init() -> None:
-    """Interactive first-time setup â€” configure LLM provider, API keys, and preferences."""
+    """Interactive first-time setup - configure LLM provider, API keys, and preferences."""
     console.print()
     console.print(
         Panel(
             "[bold cyan]Welcome to DevAgent![/bold cyan]\n\n"
             "This wizard will configure your LLM provider, API keys, and preferences.\n"
             "All settings are stored in your user config directory.",
-            title="âš¡ DevAgent Setup",
+            title="DevAgent Setup",
             border_style="cyan",
         )
     )
@@ -473,9 +478,9 @@ def init() -> None:
             msg = "API key provided" if ok else "No API key provided"
 
     if ok:
-        console.print(f"  âœ… LLM provider: {msg}")
+        console.print(f"  OK LLM provider: {msg}")
     else:
-        console.print(f"  âŒ LLM provider: {msg}")
+        console.print(f"  FAIL LLM provider: {msg}")
         if not Confirm.ask("Continue anyway?", default=False):
             raise typer.Exit(1)
 
@@ -484,29 +489,29 @@ def init() -> None:
         with console.status("[cyan]Validating Brave Search...[/cyan]"):
             ok, msg = _validate_brave_key(brave_key)
         if ok:
-            console.print(f"  âœ… Brave Search: {msg}")
+            console.print(f"  OK Brave Search: {msg}")
         else:
-            console.print(f"  âŒ Brave Search: {msg}")
+            console.print(f"  FAIL Brave Search: {msg}")
     elif search_provider == "searchx" and searchx_key:
         with console.status("[cyan]Validating SearchX...[/cyan]"):
             ok, msg = _validate_searchx_key(searchx_key)
         if ok:
-            console.print(f"  âœ… SearchX: {msg}")
+            console.print(f"  OK SearchX: {msg}")
         else:
-            console.print(f"  âŒ SearchX: {msg}")
+            console.print(f"  FAIL SearchX: {msg}")
     else:
-        console.print(f"  âš ï¸  {search_provider.capitalize()} API key not provided â€” search will not work")
+        console.print(f"  WARN {search_provider.capitalize()} API key not provided - search will not work")
 
     # --- Step 8: Validate GitHub token ---
     if gh_token:
         with console.status("[cyan]Validating GitHub token...[/cyan]"):
             ok, msg = _validate_github_token(gh_token)
         if ok:
-            console.print(f"  âœ… GitHub: {msg}")
+            console.print(f"  OK GitHub: {msg}")
         else:
-            console.print(f"  âŒ GitHub: {msg}")
+            console.print(f"  FAIL GitHub: {msg}")
     else:
-        console.print("  âš ï¸  GitHub token not provided â€” issue fetching will not work")
+        console.print("  WARN GitHub token not provided - issue fetching will not work")
 
     # --- Step 9: Build and save config ---
     config = DevAgentConfig(
@@ -539,7 +544,7 @@ def init() -> None:
             f"Config file: [dim]{get_config_path()}[/dim]\n"
             f"Provider: [cyan]{provider}[/cyan]\n"
             f"Model: [cyan]{model}[/cyan]",
-            title="âœ… DevAgent Setup Complete",
+            title="DevAgent Setup Complete",
             border_style="green",
         )
     )
@@ -562,7 +567,7 @@ def config(
             console.print(
                 Panel(
                     "No configuration found. Run [bold cyan]devagent init[/bold cyan] first.",
-                    title="âŒ No Config",
+                    title="FAIL No Config",
                     border_style="red",
                 )
             )
@@ -656,7 +661,7 @@ def config(
 
         setattr(obj, final_key, value)
         save_config(cfg)
-        console.print(f"[green]âœ… Set {key} = {value}[/green]")
+        console.print(f"[green]Set {key} = {value}[/green]")
 
 
 @app.command()
@@ -682,7 +687,7 @@ def index(
     project_root, found_marker = detect_project_root()
     if not found_marker:
         console.print(
-            "[yellow]âš ï¸  No project marker found (.git, pyproject.toml, etc.). "
+            "[yellow]WARN No project marker found (.git, pyproject.toml, etc.). "
             f"Using current directory: {project_root}[/yellow]\n"
         )
     else:
@@ -700,7 +705,7 @@ def index(
                 Panel(
                     "This project has not been indexed yet.\n"
                     "Run [bold cyan]devagent index[/bold cyan] to create the index.",
-                    title="ðŸ“Š Index Status",
+                    title="Index Status",
                     border_style="yellow",
                 )
             )
@@ -709,7 +714,7 @@ def index(
         # Check for changes
         changes = asyncio.run(get_changed_files_count(project_root, sqlite_path))
 
-        table = Table(title="ðŸ“Š Index Status", border_style="cyan")
+        table = Table(title="Index Status", border_style="cyan")
         table.add_column("Metric", style="bold")
         table.add_column("Value", justify="right")
 
@@ -725,11 +730,11 @@ def index(
         total_changes = changes["changed"] + changes["new"] + changes["deleted"]
         if total_changes > 0:
             console.print(
-                f"\n[yellow]âš ï¸  {total_changes} file(s) changed since last index. "
+                f"\n[yellow]WARN {total_changes} file(s) changed since last index. "
                 "Run [bold]devagent index[/bold] to update.[/yellow]"
             )
         else:
-            console.print("\n[green]âœ… Index is up to date.[/green]")
+            console.print("\n[green]Index is up to date.[/green]")
         return
 
     # --- --clear flag ---
@@ -747,67 +752,41 @@ def index(
             return
 
         clear_project_index(project_root)
-        console.print("[green]âœ… Index cleared successfully.[/green]")
+        console.print("[green]Index cleared successfully.[/green]")
         return
 
     # --- Default: run indexing ---
-    if not config_exists():
-        console.print(
-            Panel(
-                "No configuration found. Run [bold cyan]devagent init[/bold cyan] first.",
-                title="âŒ No Config",
-                border_style="red",
-            )
-        )
-        raise typer.Exit(1)
-
-    incremental = not full
-
     console.print(
         Panel(
             f"[bold cyan]Indexing project...[/bold cyan]\n"
-            f"Mode: [cyan]{'incremental' if incremental else 'full rebuild'}[/cyan]\n"
+            f"Mode: [cyan]{'incremental' if not full else 'full rebuild'}[/cyan]\n"
             f"Project: [dim]{project_root}[/dim]",
-            title="ðŸ” DevAgent Indexer",
+            title="DevAgent Indexer",
             border_style="cyan",
         )
     )
 
     async def _run_index() -> dict:
-        """Launch CodeSearchMCP and run indexing."""
-        import json
-        import os
+        """Run the installed CodePrism indexer."""
+        from codeprism import CodePrism, CodePrismConfig
 
-        from mcp import ClientSession
-        from mcp.client.stdio import StdioServerParameters, stdio_client
-
-        from devagent.core.storage import get_config_path
-        env = os.environ.copy()
-        env["SPECSYNC_CONFIG_PATH"] = str(get_config_path())
-
-        params = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "devagent.mcp.servers.code_search.server"],
-            env=env,
+        prism = CodePrism(
+            str(project_root.resolve()),
+            CodePrismConfig(parse_workers=1),
         )
-
-        async with stdio_client(params) as transport, ClientSession(*transport) as session:
-            await session.initialize()
-
-            result = await session.call_tool(
-                "index_codebase",
-                {
-                    "project_root": str(project_root.resolve()),
-                    "incremental": incremental,
-                },
-            )
-
-            if result.isError:
-                error_text = result.content[0].text if result.content else "Unknown error"
-                raise RuntimeError(f"Indexing failed: {error_text}")
-
-            text = result.content[0].text if result.content else "{}"
-            return json.loads(text)
+        try:
+            await prism.initialize()
+            result = await prism.index()
+            return {
+                "files_indexed": result.file_count,
+                "symbols_indexed": result.symbol_count,
+                "edges_created": result.edge_count,
+                "files_skipped": result.files_skipped,
+                "duration_seconds": result.duration_seconds,
+                "errors": result.errors,
+            }
+        finally:
+            await prism.close()
 
     try:
         with console.status("[cyan]Indexing codebase (this may take a moment on first run)...[/cyan]"):
@@ -819,22 +798,28 @@ def index(
         table.add_column("Value", justify="right")
 
         table.add_row("Files indexed", str(result.get("files_indexed", 0)))
-        table.add_row("Chunks created", str(result.get("chunks_created", 0)))
+        table.add_row("Symbols indexed", str(result.get("symbols_indexed", 0)))
+        table.add_row("Edges created", str(result.get("edges_created", 0)))
         table.add_row("Files skipped (unchanged)", str(result.get("files_skipped", 0)))
         table.add_row("Duration", f"{result.get('duration_seconds', 0):.1f}s")
 
         console.print()
         console.print(table)
 
+        if result.get("errors"):
+            console.print("[yellow]Some files could not be indexed:[/yellow]")
+            for error in result["errors"]:
+                console.print(f"[yellow]- {error}[/yellow]")
+
         chroma_dir = get_chroma_dir(project_root)
         console.print(f"\n[dim]Index stored at: {chroma_dir.parent}[/dim]")
-        console.print("[green]âœ… Indexing complete.[/green]")
+        console.print("[green]Indexing complete.[/green]")
 
     except Exception as exc:
         console.print(
             Panel(
                 f"[red bold]Indexing failed[/red bold]\n\n{exc}",
-                title="âŒ Error",
+                title="Error",
                 border_style="red",
             )
         )
@@ -852,7 +837,7 @@ def analyze(
         help="Output format: terminal, markdown, both, json",
     ),
     repo: str | None = typer.Option(
-        None, "--repo", "-r", help="GitHub repo (owner/repo) â€” overrides default"
+        None, "--repo", "-r", help="GitHub repo (owner/repo) - overrides default"
     ),
     chat: bool = typer.Option(False, "--chat", "-c", help="Drop into chat session after analysis"),
 ) -> None:
@@ -877,7 +862,7 @@ def analyze(
     sqlite_path = get_sqlite_path(project_root)
     idx_status = asyncio.run(get_index_status(sqlite_path))
     if not idx_status["exists"]:
-        console.print("[yellow]âš ï¸ This project has not been indexed yet.[/yellow]")
+        console.print("[yellow]WARN This project has not been indexed yet.[/yellow]")
         if Confirm.ask("Do you want to index it now?"):
             index(full=False, status=False, clear=False)
         else:
@@ -911,7 +896,7 @@ def analyze(
         # If it's a PR URL, show a note
         if resource_type == "pull_request":
             console.print(
-                f"[dim]Note: Analyzing PR #{parsed_url.number} as a spec â€” "
+                f"[dim]Note: Analyzing PR #{parsed_url.number} as a spec - "
                 f"extracting intent from PR description and title.[/dim]"
             )
 
@@ -987,7 +972,7 @@ def analyze(
     if output in ("markdown", "both"):
         md_path = generate_markdown_report(report, project_root, project_name)
         if output == "markdown":
-            console.print(f"[green]âœ… Markdown report saved to: [cyan]{md_path}[/cyan][/green]")
+            console.print(f"[green]Markdown report saved to: [cyan]{md_path}[/cyan][/green]")
             return
 
     if output in ("terminal", "both"):
@@ -1074,7 +1059,7 @@ def reports(
             Panel(
                 "No reports found for this project.\n"
                 "Run [bold cyan]devagent analyze[/bold cyan] to generate one.",
-                title="ðŸ“„ Reports",
+                title="Reports",
                 border_style="yellow",
             )
         )
@@ -1099,17 +1084,17 @@ def reports(
             console.print(f"[red]No report matching '{show}' found.[/red]")
             console.print("[dim]Available reports:[/dim]")
             for rf in report_files:
-                console.print(f"  â€¢ {rf.stem}")
+                console.print(f"  - {rf.stem}")
             return
 
         content = match.read_text(encoding="utf-8")
         console.print()
-        console.print(Panel(f"[dim]{match.name}[/dim]", title="ðŸ“„ Report", border_style="cyan"))
+        console.print(Panel(f"[dim]{match.name}[/dim]", title="Report", border_style="cyan"))
         console.print(Markdown(content))
         return
 
     # --- Default: list all reports ---
-    table = Table(title="ðŸ“„ Saved Reports", border_style="cyan")
+    table = Table(title="Saved Reports", border_style="cyan")
     table.add_column("#", style="dim", justify="right")
     table.add_column("Report", style="cyan")
     table.add_column("Source")
@@ -1136,7 +1121,7 @@ def reports(
         # Count requirements (lines starting with ####)
         req_count = content.count("#### REQ-")
         # Count conflicts (lines containing CONFLICT)
-        conflict_count = content.count("ðŸš¨ CONFLICT")
+        conflict_count = content.count("ALERT CONFLICT")
 
         # Truncate source for table display
         if len(source) > 40:
@@ -1272,7 +1257,7 @@ def watch(
         asyncio.run(_watch_register(repo, interval_minutes, label_list))
         return
 
-    # No flags â€” show usage hint
+    # No flags - show usage hint
     console.print(
         "[dim]Usage: devagent watch --repo owner/repo    (to start watching)\n"
         "       devagent watch --status              (to check now)\n"
@@ -1342,8 +1327,8 @@ async def _watch_register(repo_str: str, interval_minutes: int, labels: list[str
     await init_watcher_db()
     await register_repo(owner, repo_name, interval_minutes, labels)
     console.print(
-        f"[green]âœ“[/green] Now watching [bold]{owner}/{repo_name}[/bold]  "
-        f"Â·  checking every {interval_minutes} minutes"
+        f"[green]OK[/green] Now watching [bold]{owner}/{repo_name}[/bold]  "
+        f"-  checking every {interval_minutes} minutes"
     )
     console.print("[dim]Run 'devagent watch --status' to run the first check now.[/dim]")
 
@@ -1382,7 +1367,7 @@ async def _watch_stop(repo_str: str) -> None:
     owner, repo_name = _split_repo_string(repo_str)
     await init_watcher_db()
     await deactivate_repo(owner, repo_name)
-    console.print(f"[green]âœ“[/green] Stopped watching [bold]{owner}/{repo_name}[/bold]")
+    console.print(f"[green]OK[/green] Stopped watching [bold]{owner}/{repo_name}[/bold]")
     console.print("[dim]Historical analysis data is preserved.[/dim]")
 
 
@@ -1636,15 +1621,15 @@ def run(
     from devagent.agent.flows import DevAgentSession
     from devagent.core.project import detect_project_root
 
+    project_root, _ = detect_project_root(Path(project) if project else None)
+
     if not config_exists():
         console.print("[red]No config found. Run [bold]devagent init[/bold] first.[/red]")
         raise typer.Exit(1)
 
-    cfg = load_config()
+    cfg = load_config(str(project_root))
     if model:
         cfg.llm.model = model
-
-    project_root, _ = detect_project_root(Path(project) if project else None)
     tools_list = [t.strip() for t in allow_tools.split(",")] if allow_tools else None
 
     try:
@@ -2183,13 +2168,13 @@ def doctor() -> None:
     if config_exists():
         try:
             cfg = load_config()
-            table.add_row("Config File", "âœ…", str(get_config_path()))
+            table.add_row("Config File", "OK", str(get_config_path()))
         except Exception as exc:
             cfg = None
-            table.add_row("Config File", "âŒ", f"Invalid: {exc}")
+            table.add_row("Config File", "FAIL", f"Invalid: {exc}")
     else:
         cfg = None
-        table.add_row("Config File", "âŒ", "Not found â€” run: devagent init")
+        table.add_row("Config File", "FAIL", "Not found - run: devagent init")
 
     # 2. LLM provider
     if cfg:
@@ -2201,51 +2186,51 @@ def doctor() -> None:
                 msg = f"API key configured for {cfg.llm.provider}" if ok else "No API key"
         table.add_row(
             f"LLM ({cfg.llm.provider})",
-            "âœ…" if ok else "âŒ",
+            "OK" if ok else "FAIL",
             msg,
         )
         # Offline capability row
         offline_capable = cfg.llm.provider == "ollama"
         table.add_row(
             "Offline Mode",
-            "âœ…" if offline_capable else "☁️",
+            "OK" if offline_capable else "CLOUD",
             "local (offline capable)" if offline_capable
-            else f"cloud — requires internet ({cfg.llm.provider})",
+            else f"cloud - requires internet ({cfg.llm.provider})",
         )
     else:
-        table.add_row("LLM Provider", "âŒ", "No config")
-        table.add_row("Offline Mode", "âŒ", "No config")
+        table.add_row("LLM Provider", "FAIL", "No config")
+        table.add_row("Offline Mode", "FAIL", "No config")
 
     # 3. GitHub token
     if cfg and cfg.github.token:
         with console.status("[dim]Checking GitHub token...[/dim]"):
             ok, msg = _validate_github_token(cfg.github.token)
-        table.add_row("GitHub Token", "âœ…" if ok else "âŒ", msg)
+        table.add_row("GitHub Token", "OK" if ok else "FAIL", msg)
     else:
-        table.add_row("GitHub Token", "âŒ", "Not configured")
+        table.add_row("GitHub Token", "FAIL", "Not configured")
 
     # 4. Search provider
     if cfg:
         if cfg.search_provider == "brave" and cfg.brave.api_key:
             with console.status("[dim]Checking Brave Search...[/dim]"):
                 ok, msg = _validate_brave_key(cfg.brave.api_key)
-            table.add_row("Brave Search", "âœ…" if ok else "âŒ", msg)
+            table.add_row("Brave Search", "OK" if ok else "FAIL", msg)
         elif cfg.search_provider == "searchx" and cfg.searchx.api_key:
             with console.status("[dim]Checking SearchX...[/dim]"):
                 ok, msg = _validate_searchx_key(cfg.searchx.api_key)
-            table.add_row("SearchX", "âœ…" if ok else "âŒ", msg)
+            table.add_row("SearchX", "OK" if ok else "FAIL", msg)
         else:
-            table.add_row(f"{cfg.search_provider.capitalize()} Search", "âš ï¸", "Not configured (optional)")
+            table.add_row(f"{cfg.search_provider.capitalize()} Search", "WARN", "Not configured (optional)")
     else:
-        table.add_row("Search Provider", "âŒ", "No config")
+        table.add_row("Search Provider", "FAIL", "No config")
 
     # 5. Node.js
     ok, msg = _check_command(["node", "--version"])
-    table.add_row("Node.js", "âœ…" if ok else "âŒ", msg if ok else "Not found â€” download from nodejs.org")
+    table.add_row("Node.js", "OK" if ok else "FAIL", msg if ok else "Not found - download from nodejs.org")
 
     # 6. npx
     ok, msg = _check_command(["npx", "--version"])
-    table.add_row("npx", "âœ…" if ok else "âŒ", msg if ok else "Not found â€” install Node.js")
+    table.add_row("npx", "OK" if ok else "FAIL", msg if ok else "Not found - install Node.js")
 
     console.print(table)
     console.print()
