@@ -392,3 +392,38 @@ def test_fit_request_context_counts_tools_and_keeps_newest_messages():
     assert fitted[0].role == "system"
     assert "latest request" in fitted[-1].content
     assert len(fitted) < len(messages)
+
+
+def test_iteration_messages_do_not_replay_old_history():
+    from devagent.core.llm import AgentMessage, ToolCallRequest
+    from devagent.session.history import build_iteration_messages
+
+    assistant = AgentMessage(
+        role="assistant",
+        tool_calls=[ToolCallRequest(id="1", name="read_file", args={"path": "x.py"})],
+    )
+    result = AgentMessage(
+        role="tool_result",
+        content="latest result",
+        tool_call_id="1",
+        tool_name="read_file",
+    )
+    messages = build_iteration_messages(
+        "system",
+        "current request",
+        assistant_message=assistant,
+        tool_results=[result],
+    )
+
+    contents = [message.content for message in messages]
+    assert "current request" in contents
+    assert "latest result" in contents
+    assert "old conversation" not in contents
+    assert len(messages) == 4
+
+
+def test_conversational_requests_do_not_need_tool_schemas():
+    from devagent.agent.loop import _request_needs_tools
+
+    assert not _request_needs_tools("What is 2 + 2?")
+    assert _request_needs_tools("Read the project README and summarize it.")
