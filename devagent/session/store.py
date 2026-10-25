@@ -246,6 +246,7 @@ def append_event(
                 tokens_in, tokens_out, now,
             ),
         )
+        conn.commit()
         return seq
 
 

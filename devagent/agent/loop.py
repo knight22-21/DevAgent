@@ -19,7 +19,7 @@ from typing import Any
 from devagent.agent.permissions import PermissionManager
 from devagent.core.llm import LLMClient
 from devagent.session.budget import BudgetExceeded, TokenBudget
-from devagent.session.history import build_messages
+from devagent.session.history import build_messages, fit_request_context
 from devagent.session.manager import SessionManager
 from devagent.session.memory import MemoryBlock
 from devagent.tools.registry import ToolRegistry
@@ -196,8 +196,24 @@ class AgentLoop:
                 if overlay:
                     current_system = full_system + overlay
 
+            # Select LLM for this iteration (router or default)
+            task = "fallback"
+            if _HAS_ROUTER and self._router is not None:
+                current_llm, task = self._router.get_llm_for_iteration(last_tool_names, iteration)
+            else:
+                current_llm = self.llm
+
             # Build message history from DB
-            messages = build_messages(self.session_id, current_system)
+            messages = build_messages(
+                self.session_id,
+                current_system,
+                db_path=self.session_mgr.db_path,
+            )
+            from devagent.session.compressor import _context_window_for
+            context_limit = int(
+                _context_window_for(current_llm.cfg.provider, current_llm.cfg.model) * 0.55
+            )
+            messages, tools = fit_request_context(messages, tools, context_limit)
 
             # Budget check
             try:
@@ -205,13 +221,6 @@ class AgentLoop:
             except BudgetExceeded as exc:
                 yield ErrorEvent(str(exc))
                 return
-
-            # Select LLM for this iteration (router or default)
-            task = "fallback"
-            if _HAS_ROUTER and self._router is not None:
-                current_llm, task = self._router.get_llm_for_iteration(last_tool_names, iteration)
-            else:
-                current_llm = self.llm
 
             # LLM call
             try:
