@@ -134,7 +134,9 @@ def _classify_event(event: dict) -> str:
     tool_calls = event.get("tool_calls") or []
     if role == "user":
         return "user_message"
-    if role == "tool":
+    if role in ("tool", "tool_result"):
+        # SessionManager.record_tool_result() stores the row with
+        # role="tool_result"; "tool" is kept for rows written by older builds.
         return "tool_result"
     if role == "assistant":
         return "tool_call" if tool_calls else "thinking"
