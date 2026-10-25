@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from devagent.agent.permissions import PermissionManager
@@ -203,16 +204,22 @@ class AgentLoop:
             else:
                 current_llm = self.llm
 
-            # Build message history from DB
+            db_path = getattr(self.session_mgr, "db_path", None)
+            if not isinstance(db_path, (str, Path)):
+                db_path = None
             messages = build_messages(
                 self.session_id,
                 current_system,
-                db_path=self.session_mgr.db_path,
+                db_path=db_path,
             )
             from devagent.session.compressor import _context_window_for
-            context_limit = int(
-                _context_window_for(current_llm.cfg.provider, current_llm.cfg.model) * 0.55
-            )
+            provider = getattr(getattr(current_llm, "cfg", None), "provider", None) or "anthropic"
+            model = getattr(getattr(current_llm, "cfg", None), "model", None) or "claude-sonnet-4-6"
+            if not isinstance(provider, str):
+                provider = "anthropic"
+            if not isinstance(model, str):
+                model = "claude-sonnet-4-6"
+            context_limit = int(_context_window_for(provider, model) * 0.55)
             messages, tools = fit_request_context(messages, tools, context_limit)
 
             # Budget check
