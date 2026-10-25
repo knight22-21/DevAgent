@@ -11,6 +11,7 @@ token cost of the original event log.
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from devagent.core.llm import AgentMessage, ToolCallRequest
 from devagent.session import store
@@ -74,6 +75,75 @@ def build_messages(
         else:
             messages.append(AgentMessage(role=role, content=content))
 
+    return messages
+
+
+def _clip(text: str, max_chars: int) -> str:
+    """Keep a bounded representation while preserving both ends of a result."""
+    if len(text) <= max_chars:
+        return text
+    half = max_chars // 2
+    return text[:half] + "\n...[truncated]...\n" + text[-half:]
+
+
+def build_resume_context(
+    session_id: str,
+    db_path=None,
+    max_chars: int = 3_000,
+) -> str:
+    """Return compact prior-session context for a new user turn.
+
+    Full events remain persisted for history and audit, but only a bounded
+    summary or recent event window is carried into the next LLM request.
+    """
+    try:
+        summary = store.get_compressed_summary(session_id, db_path=db_path)
+        if summary:
+            return _clip(summary, max_chars)
+        events = store.get_events(session_id, db_path=db_path)[-4:]
+    except sqlite3.OperationalError:
+        return ""
+    if not events:
+        return ""
+
+    lines: list[str] = []
+    for event in events:
+        role = event.get("role", "unknown")
+        content = (event.get("content") or "").strip()
+        if content:
+            lines.append(f"[{role}] {_clip(content, 600)}")
+    return _clip("\n".join(lines), max_chars)
+
+
+def build_iteration_messages(
+    system_prompt: str,
+    user_message: str,
+    *,
+    resume_context: str = "",
+    execution_state: str = "",
+    assistant_message: AgentMessage | None = None,
+    tool_results: list[AgentMessage] | None = None,
+) -> list[AgentMessage]:
+    """Build a bounded request for one ReAct iteration.
+
+    The complete session history is deliberately excluded. Only the current
+    user request, compact state, and the latest tool round are sent.
+    """
+    messages = [AgentMessage(role="system", content=system_prompt)]
+    if resume_context:
+        messages.append(AgentMessage(
+            role="system",
+            content="## Prior session context (bounded)\n" + _clip(resume_context, 3_000),
+        ))
+    messages.append(AgentMessage(role="user", content=user_message))
+    if execution_state:
+        messages.append(AgentMessage(
+            role="system",
+            content="## Current execution state\n" + _clip(execution_state, 3_000),
+        ))
+    if assistant_message is not None:
+        messages.append(assistant_message)
+    messages.extend(tool_results or [])
     return messages
 
 

@@ -18,9 +18,14 @@ from pathlib import Path
 from typing import Any
 
 from devagent.agent.permissions import PermissionManager
-from devagent.core.llm import LLMClient
+from devagent.core.llm import AgentMessage, LLMClient, ToolCallRequest
 from devagent.session.budget import BudgetExceeded, TokenBudget
-from devagent.session.history import build_messages, fit_request_context
+from devagent.session.history import (
+    build_iteration_messages,
+    build_messages,  # noqa: F401
+    build_resume_context,
+    fit_request_context,
+)
 from devagent.session.manager import SessionManager
 from devagent.session.memory import MemoryBlock
 from devagent.tools.registry import ToolRegistry
@@ -126,6 +131,43 @@ AgentEvent = (
 
 # Tool names that trigger the auto-test repair loop
 _WRITE_TOOL_NAMES = {"write_file", "edit_file"}
+_READ_TOOL_NAMES = {
+    "read_file", "grep", "find_files", "list_files", "git_diff", "git_show",
+    "cp_get_context", "cp_search_symbol", "cp_get_module_summary", "cp_get_callers",
+    "cp_get_callees", "cp_get_file_map", "cp_get_dependencies", "cp_get_impact",
+    "cp_get_data_flow",
+}
+_WRITE_FOLLOWUP_NAMES = _WRITE_TOOL_NAMES | {"run_shell", "git_diff", "git_show"}
+_TOOL_KEYWORDS = (
+    "file", "code", "project", "repo", "read", "inspect", "find", "search",
+    "test", "run", "fix", "implement", "change", "edit", "write", "create",
+    "delete", "git", "index", "mcp", "function", "class",
+)
+
+
+def _request_needs_tools(user_message: str) -> bool:
+    """Avoid sending tool schemas for clearly conversational requests."""
+    text = user_message.lower()
+    return any(keyword in text for keyword in _TOOL_KEYWORDS)
+
+
+def _tools_for_iteration(registry, all_tools, user_message: str, iteration: int, last_tool_names: list[str]):
+    """Return only the tools needed for this iteration."""
+    if iteration == 1:
+        return all_tools if _request_needs_tools(user_message) else []
+
+    allowed = set(last_tool_names)
+    if set(last_tool_names) & _WRITE_TOOL_NAMES:
+        allowed.update(_WRITE_FOLLOWUP_NAMES)
+    elif set(last_tool_names) & _READ_TOOL_NAMES:
+        allowed.update(_READ_TOOL_NAMES)
+
+    for tool in all_tools:
+        for name in last_tool_names:
+            prefix = name.split("_", 1)[0] + "_"
+            if tool.name.startswith(prefix):
+                allowed.add(tool.name)
+    return registry.get_restricted_definitions(sorted(allowed))
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +218,19 @@ class AgentLoop:
         # Persist user message
         self.session_mgr.record_user(self.session_id, user_message)
 
-        tools = self.registry.get_definitions()
+        all_tools = self.registry.get_definitions()
         iteration = 0
         last_tool_names: list[str] = []
+        pending_assistant: AgentMessage | None = None
+        pending_tool_results: list[AgentMessage] = []
+        execution_state = ""
+
+        db_path = getattr(self.session_mgr, "db_path", None)
+        if not isinstance(db_path, (str, Path)):
+            db_path = None
+        resume_context = (
+            "" if self._bare else build_resume_context(self.session_id, db_path=db_path)
+        )
 
         # Reload full system prompt with latest memory + session overlay
         full_system = self.system_prompt
@@ -204,13 +256,20 @@ class AgentLoop:
             else:
                 current_llm = self.llm
 
-            db_path = getattr(self.session_mgr, "db_path", None)
-            if not isinstance(db_path, (str, Path)):
-                db_path = None
-            messages = build_messages(
-                self.session_id,
+            tools = _tools_for_iteration(
+                self.registry,
+                all_tools,
+                user_message,
+                iteration,
+                last_tool_names,
+            )
+            messages = build_iteration_messages(
                 current_system,
-                db_path=db_path,
+                user_message,
+                resume_context=resume_context if pending_assistant is None else "",
+                execution_state=execution_state,
+                assistant_message=pending_assistant,
+                tool_results=pending_tool_results,
             )
             from devagent.session.compressor import _context_window_for
             provider = getattr(getattr(current_llm, "cfg", None), "provider", None) or "anthropic"
@@ -285,6 +344,15 @@ class AgentLoop:
 
                 # Execute each tool call and track names for router
                 last_tool_names = []
+                pending_assistant = AgentMessage(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=[
+                        ToolCallRequest(id=tc.id, name=tc.name, args=tc.args)
+                        for tc in response.tool_calls
+                    ],
+                )
+                pending_tool_results = []
                 for tc in response.tool_calls:
                     last_tool_names.append(tc.name)
 
@@ -376,8 +444,19 @@ class AgentLoop:
                         tool_name=tc.name,
                         content=result,
                     )
+                    pending_tool_results.append(AgentMessage(
+                        role="tool_result",
+                        content=result[:4_000],
+                        tool_call_id=tc.id,
+                        tool_name=tc.name,
+                    ))
 
-                # Loop back to let the LLM continue
+                execution_state = (
+                    "Latest tool round completed: "
+                    + ", ".join(message.tool_name for message in pending_tool_results)
+                )
+
+                # Loop back with only the latest tool round, not full history.
                 continue
 
             else:
