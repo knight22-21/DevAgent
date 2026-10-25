@@ -263,6 +263,18 @@ class DevAgentSession:
             except Exception:
                 pass
         self._cp_client = cp_client
+        self._index_watcher = None
+        if cp_client is not None:
+            try:
+                from devagent.codeprism.watcher import ProjectIndexWatcher
+
+                self._index_watcher = ProjectIndexWatcher(
+                    self._project_root,
+                    cp_client.update_file,
+                )
+                self._index_watcher.start()
+            except Exception:
+                self._index_watcher = None
 
         # ── Security gate confirm callback ────────────────────────────
         def _confirm(msg: str) -> bool:
@@ -1439,6 +1451,8 @@ class DevAgentSession:
         )
 
     def _print_exit(self) -> None:
+        if self._index_watcher is not None:
+            self._index_watcher.stop()
         from devagent.agent import permissions as perm_registry
         perm_registry.unregister(self.session_id)
         if self._hook_runner and self._hook_runner.hooks:

@@ -343,6 +343,25 @@ class CodePrismClient:
     # Session tracking
     # ------------------------------------------------------------------
 
+    def update_file(self, file_path: str) -> dict:
+        """Synchronize one external file through CodePrism's incremental updater."""
+        if not self._ensure_ready():
+            return {"status": "NOT_INDEXED"}
+        try:
+            from codeprism.indexer.incremental_updater import IncrementalUpdater
+
+            updater = IncrementalUpdater(self._prism._graph, self._prism._storage)
+            result = _run(updater.update_file(str(Path(file_path).resolve())))
+            return {
+                "status": "PASS",
+                "nodes_added": result.nodes_added,
+                "nodes_removed": result.nodes_removed,
+                "edges_updated": result.edges_updated,
+                "skipped": result.skipped,
+            }
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
     def record_read(self, file: str, symbol: str) -> None:
         if not self._ensure_ready() or self._session_obj is None:
             return
