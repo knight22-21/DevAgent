@@ -1546,6 +1546,42 @@ def session_compress(
 # Primary agent run command
 # ---------------------------------------------------------------------------
 
+def _pick_session(sessions: list[dict]) -> str | None:
+    """Interactively choose a session with arrow keys when possible."""
+    options = [
+        (item["id"], item.get("title") or "Untitled session")
+        for item in sessions
+    ]
+    options.append(("", "Start new session"))
+
+    try:
+        from prompt_toolkit.shortcuts import radiolist_dialog
+
+        selected = radiolist_dialog(
+            title="Recent sessions",
+            text="Use ↑/↓ to select and Enter to confirm.",
+            values=options,
+        ).run()
+        return selected or None
+    except (ImportError, EOFError, KeyboardInterrupt):
+        console.print("[bold]Recent sessions[/bold]")
+        for index, item in enumerate(sessions, 1):
+            title = item.get("title") or "Untitled session"
+            console.print(f"  [cyan]{index}[/cyan]. {title} ({item['id'][:8]})")
+        new_index = len(sessions) + 1
+        console.print(f"  [cyan]{new_index}[/cyan]. Start new session")
+        choice = console.input("Select a session [default: new]: ").strip()
+        if choice.isdigit():
+            selected = int(choice)
+            if 1 <= selected <= len(sessions):
+                return sessions[selected - 1]["id"]
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Primary agent run command
+# ---------------------------------------------------------------------------
+
 @app.command()
 def run(
     resume: str | None = typer.Option(
@@ -1598,6 +1634,11 @@ def run(
     diff_preview: bool = typer.Option(
         False, "--diff-preview", help="Show a diff and ask for confirmation before each file write/edit"
     ),
+    session_picker: bool = typer.Option(
+        True,
+        "--session-picker/--no-session-picker",
+        help="Use arrow keys to select a recent session interactively",
+    ),
 ) -> None:
     """Start an interactive agent session (the main DevAgent command)."""
     from devagent.agent.flows import DevAgentSession
@@ -1615,22 +1656,17 @@ def run(
     tools_list = [t.strip() for t in allow_tools.split(",")] if allow_tools else None
 
     selected_resume = resume
-    if selected_resume is None and sys.stdin.isatty() and sys.stdout.isatty():
+    if (
+        selected_resume is None
+        and session_picker
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    ):
         from devagent.session.manager import SessionManager
 
         sessions = SessionManager().list_by_project(str(project_root), limit=10)
         if sessions:
-            console.print("[bold]Recent sessions[/bold]")
-            for index, item in enumerate(sessions, 1):
-                title = item.get("title") or "Untitled session"
-                console.print(f"  [cyan]{index}[/cyan]. {title} ({item['id'][:8]})")
-            new_index = len(sessions) + 1
-            console.print(f"  [cyan]{new_index}[/cyan]. Start new session")
-            choice = console.input("Select a session [default: new]: ").strip()
-            if choice and choice.isdigit():
-                selected = int(choice)
-                if 1 <= selected <= len(sessions):
-                    selected_resume = sessions[selected - 1]["id"]
+            selected_resume = _pick_session(sessions)
 
     try:
         session = DevAgentSession(
