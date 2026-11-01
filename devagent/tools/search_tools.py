@@ -42,7 +42,10 @@ def register_search_tools(registry: ToolRegistry, project_root: str = ".") -> No
 
         try:
             search_root = (root / path).resolve()
-            if not str(search_root).startswith(str(root)):
+            # A string prefix is not a containment test: `/srv/project-secrets`
+            # starts with `/srv/project` without being inside it. Same rule as
+            # `file_tools._within_roots`.
+            if not search_root.is_relative_to(root):
                 return "[error] path escapes project root"
         except Exception as exc:
             return f"[error] {exc}"
@@ -74,7 +77,11 @@ def register_search_tools(registry: ToolRegistry, project_root: str = ".") -> No
                 "glob": {"type": "string", "description": "File glob filter, e.g. '*.py'"},
                 "case_sensitive": {"type": "boolean", "default": True},
                 "max_results": {"type": "integer", "default": 50},
-                "context_lines": {"type": "integer", "default": 0, "description": "Lines of context around each match"},
+                "context_lines": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Lines of context around each match",
+                },
             },
             "required": ["pattern"],
         },
@@ -88,7 +95,11 @@ def register_search_tools(registry: ToolRegistry, project_root: str = ".") -> No
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Glob pattern, e.g. '*.ts'"},
-                "path": {"type": "string", "description": "Sub-directory to search in", "default": "."},
+                "path": {
+                    "type": "string",
+                    "description": "Sub-directory to search in",
+                    "default": ".",
+                },
                 "max_results": {"type": "integer", "default": 100},
             },
         },
@@ -164,10 +175,7 @@ def _python_grep(
                 if context:
                     start = max(0, i - 1 - context)
                     end = min(len(lines), i + context)
-                    block = [
-                        f"{rel}:{j + 1}: {lines[j]}"
-                        for j in range(start, end)
-                    ]
+                    block = [f"{rel}:{j + 1}: {lines[j]}" for j in range(start, end)]
                     results.extend(block)
                     results.append("--")
                 else:
