@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import subprocess
 import warnings
-from pathlib import Path
 from typing import Any
 
 
@@ -19,11 +18,27 @@ def register_notebook_tools(registry, project_root: str) -> None:
     """
     import nbformat
 
+    from devagent.tools.file_tools import _safe_resolve
+
+    def _resolve(path: str):
+        """Resolve a notebook path inside the project root.
+
+        Returns ``(target, None)`` or ``(None, error_message)``. `notebook_run`
+        executes the file it is given, so an unguarded `Path(root) / path`
+        turned a traversal into remote code execution.
+        """
+        try:
+            return _safe_resolve(project_root, path), None
+        except ValueError:
+            return None, "[error] path escapes project root"
+
     def notebook_read(args: dict[str, Any]) -> str:
         path = args.get("path", "").strip()
         if not path:
             return "[error] path is required"
-        target = Path(project_root) / path
+        target, error = _resolve(path)
+        if error:
+            return error
         if not target.exists():
             return f"[error] Notebook not found: {path}"
         try:
@@ -78,7 +93,9 @@ def register_notebook_tools(registry, project_root: str) -> None:
             return "[error] path is required"
         if cell_index is None:
             return "[error] cell_index is required"
-        target = Path(project_root) / path
+        target, error = _resolve(path)
+        if error:
+            return error
         if not target.exists():
             return f"[error] Notebook not found: {path}"
         try:
@@ -126,7 +143,9 @@ def register_notebook_tools(registry, project_root: str) -> None:
         timeout = int(args.get("timeout", 60))
         if not path:
             return "[error] path is required"
-        target = Path(project_root) / path
+        target, error = _resolve(path)
+        if error:
+            return error
         if not target.exists():
             return f"[error] Notebook not found: {path}"
         try:
