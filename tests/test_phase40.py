@@ -7,7 +7,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # PKCE primitives
@@ -65,14 +65,22 @@ class TestTokenCache:
     def test_save_and_get_token(self) -> None:
         from devagent.mcp.auth import token_cache
 
-        with patch("keyring.set_password") as mock_set, \
-             patch("keyring.get_password") as mock_get:
-            token_cache.save_token("my-srv", "access123", "refresh456", expires_in=3600)
-            # Capture what was saved
-            saved_payload = mock_set.call_args[0][2]
+        mock_kr = MagicMock()
+        stored: dict[tuple[str, str], str] = {}
 
-            # Simulate get_password returning it
-            mock_get.return_value = saved_payload
+        def mock_set(service: str, username: str, password: str) -> None:
+            stored[(service, username)] = password
+
+        def mock_get(service: str, username: str) -> str | None:
+            return stored.get((service, username))
+
+        mock_kr.set_password.side_effect = mock_set
+        mock_kr.get_password.side_effect = mock_get
+
+        with patch.object(token_cache, "_keyring", return_value=mock_kr):
+            token_cache.save_token("my-srv", "access123", "refresh456", expires_in=3600)
+            saved_payload = mock_kr.set_password.call_args[0][2]
+            mock_kr.get_password.return_value = saved_payload
             token = token_cache.get_token("my-srv")
             assert token == "access123"
 
@@ -84,22 +92,27 @@ class TestTokenCache:
             "refresh_token": "",
             "expires_at": time.time() - 10,  # already expired
         })
-        with patch("keyring.get_password", return_value=payload):
+        mock_kr = MagicMock()
+        mock_kr.get_password.return_value = payload
+        with patch.object(token_cache, "_keyring", return_value=mock_kr):
             token = token_cache.get_token("srv")
             assert token is None
 
     def test_missing_token_returns_none(self) -> None:
         from devagent.mcp.auth import token_cache
 
-        with patch("keyring.get_password", return_value=None):
+        mock_kr = MagicMock()
+        mock_kr.get_password.return_value = None
+        with patch.object(token_cache, "_keyring", return_value=mock_kr):
             assert token_cache.get_token("srv") is None
 
     def test_clear_token(self) -> None:
         from devagent.mcp.auth import token_cache
 
-        with patch("keyring.delete_password") as mock_del:
+        mock_kr = MagicMock()
+        with patch.object(token_cache, "_keyring", return_value=mock_kr):
             token_cache.clear_token("srv")
-            mock_del.assert_called_once_with("devagent-mcp", "srv")
+            mock_kr.delete_password.assert_called_once_with("devagent-mcp", "srv")
 
     def test_get_refresh_token(self) -> None:
         from devagent.mcp.auth import token_cache
@@ -109,14 +122,18 @@ class TestTokenCache:
             "refresh_token": "ref123",
             "expires_at": time.time() + 3600,
         })
-        with patch("keyring.get_password", return_value=payload):
+        mock_kr = MagicMock()
+        mock_kr.get_password.return_value = payload
+        with patch.object(token_cache, "_keyring", return_value=mock_kr):
             rt = token_cache.get_refresh_token("srv")
             assert rt == "ref123"
 
     def test_malformed_payload_returns_none(self) -> None:
         from devagent.mcp.auth import token_cache
 
-        with patch("keyring.get_password", return_value="not-json"):
+        mock_kr = MagicMock()
+        mock_kr.get_password.return_value = "not-json"
+        with patch.object(token_cache, "_keyring", return_value=mock_kr):
             assert token_cache.get_token("srv") is None
 
     def test_no_keyring_returns_none(self) -> None:
