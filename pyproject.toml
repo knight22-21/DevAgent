@@ -49,6 +49,8 @@ dependencies = [
     "jsonschema>=4.0.0",
     # REPL tab completion
     "prompt_toolkit>=3.0.0",
+    # Platform keyring for MCP OAuth token storage (Phase 40)
+    "keyring>=24.0.0",
 ]
 
 [project.urls]
@@ -64,6 +66,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "ruff",
+    "keyring>=24.0.0",
 ]
 notebooks = [
     "nbformat>=5.10.0",
