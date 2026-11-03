@@ -9,10 +9,14 @@ Schema:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+import psutil
 
 from devagent.core.storage import get_sessions_db_path
 
@@ -38,6 +42,7 @@ def init_schema(db_path: Path | None = None) -> None:
                 title               TEXT NOT NULL DEFAULT '',
                 created_at          REAL NOT NULL,
                 updated_at          REAL NOT NULL,
+                status              TEXT NOT NULL DEFAULT 'completed',
                 metadata            TEXT NOT NULL DEFAULT '{}',
                 compressed_summary  TEXT NOT NULL DEFAULT ''
             );
@@ -58,6 +63,14 @@ def init_schema(db_path: Path | None = None) -> None:
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
             CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq);
+
+            CREATE TABLE IF NOT EXISTS session_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                pid INTEGER NOT NULL,
+                process_started REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_runs_session ON session_runs(session_id);
 
             CREATE TABLE IF NOT EXISTS memory_items (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,12 +112,20 @@ def init_schema(db_path: Path | None = None) -> None:
         # Migrate existing databases that predate Phase 8/9 columns
         for sql in (
             "ALTER TABLE sessions ADD COLUMN compressed_summary TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'",
             "ALTER TABLE events ADD COLUMN is_compressed INTEGER NOT NULL DEFAULT 0",
         ):
             try:
                 conn.execute(sql)
             except Exception:
                 pass  # column already exists — safe to ignore
+            else:
+                if "ADD COLUMN status " in sql:
+                    conn.execute("""
+                        UPDATE sessions SET status = CAST(json_extract(metadata, '$.status') AS TEXT)
+                        WHERE json_valid(metadata)
+                          AND json_type(metadata, '$.status') NOT IN ('null', 'object', 'array')
+                    """)
 
 
 # ---------------------------------------------------------------------------
@@ -121,16 +142,79 @@ def create_session(
     db_path: Path | None = None,
 ) -> None:
     now = time.time()
+    initial_status = str(metadata["status"]) if metadata and "status" in metadata else "completed"
     with _conn(db_path) as conn:
         conn.execute(
-            """INSERT INTO sessions (id, project, model, provider, title, created_at, updated_at, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, project, model, provider, title, now, now, json.dumps(metadata or {})),
+            """INSERT INTO sessions (id, project, model, provider, title, created_at, updated_at, status, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, project, model, provider, title, now, now, initial_status, json.dumps(metadata or {})),
+        )
+
+
+def set_session_status(session_id: str, status: str, db_path: Path | None = None) -> None:
+    with _conn(db_path) as conn:
+        conn.execute(
+            """UPDATE sessions SET status = CASE WHEN EXISTS
+               (SELECT 1 FROM session_runs WHERE session_id = ?) THEN 'running' ELSE ? END,
+               updated_at = ? WHERE id = ?""",
+            (session_id, status, time.time(), session_id),
+        )
+
+
+def begin_session_run(session_id: str, db_path: Path | None = None) -> str:
+    run_id = str(uuid.uuid4())
+    pid = os.getpid()
+    started = psutil.Process(pid).create_time()
+    with _conn(db_path) as conn:
+        _recover_session_runs(conn)
+        conn.execute(
+            "INSERT INTO session_runs (id, session_id, pid, process_started) VALUES (?, ?, ?, ?)",
+            (run_id, session_id, pid, started),
+        )
+        conn.execute("UPDATE sessions SET status = 'running', updated_at = ? WHERE id = ?",
+                     (time.time(), session_id))
+    return run_id
+
+
+def finish_session_run(session_id: str, run_id: str, status: str, db_path: Path | None = None) -> None:
+    with _conn(db_path) as conn:
+        _recover_session_runs(conn)
+        deleted = conn.execute("DELETE FROM session_runs WHERE id = ? AND session_id = ?",
+                               (run_id, session_id)).rowcount
+        if deleted:
+            conn.execute(
+                """UPDATE sessions SET status = CASE WHEN EXISTS
+                   (SELECT 1 FROM session_runs WHERE session_id = ?) THEN 'running' ELSE ? END,
+                   updated_at = ? WHERE id = ?""",
+                (session_id, status, time.time(), session_id),
+            )
+
+
+def _recover_session_runs(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    stale = []
+    for row in conn.execute("SELECT id, session_id, pid, process_started FROM session_runs"):
+        try:
+            process = psutil.Process(row["pid"])
+            alive = process.create_time() == row["process_started"] and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            alive = False
+        except psutil.AccessDenied:
+            alive = True
+        if not alive:
+            stale.append((row["id"], row["session_id"]))
+    for run_id, session_id in stale:
+        conn.execute("DELETE FROM session_runs WHERE id = ?", (run_id,))
+        conn.execute(
+            """UPDATE sessions SET status = CASE WHEN EXISTS
+               (SELECT 1 FROM session_runs WHERE session_id = ?) THEN 'running' ELSE 'failed' END
+               WHERE id = ?""", (session_id, session_id),
         )
 
 
 def get_session(session_id: str, db_path: Path | None = None) -> dict | None:
     with _conn(db_path) as conn:
+        _recover_session_runs(conn)
         row = conn.execute(
             "SELECT * FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
@@ -155,10 +239,18 @@ def update_session(
                 (title, now, session_id),
             )
         if metadata is not None:
-            conn.execute(
-                "UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(metadata), now, session_id),
-            )
+            if "status" in metadata:
+                conn.execute(
+                    """UPDATE sessions SET metadata = ?, status = CASE WHEN EXISTS
+                       (SELECT 1 FROM session_runs WHERE session_id = ?) THEN 'running' ELSE ? END,
+                       updated_at = ? WHERE id = ?""",
+                    (json.dumps(metadata), session_id, str(metadata["status"]), now, session_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(metadata), now, session_id),
+                )
         if title is None and metadata is None:
             conn.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -168,6 +260,7 @@ def update_session(
 
 def list_sessions(limit: int = 50, db_path: Path | None = None) -> list[dict]:
     with _conn(db_path) as conn:
+        _recover_session_runs(conn)
         rows = conn.execute(
             "SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -179,8 +272,18 @@ def list_sessions(limit: int = 50, db_path: Path | None = None) -> list[dict]:
     return result
 
 
+def session_counts(db_path: Path | None = None) -> tuple[int, int]:
+    with _conn(db_path) as conn:
+        _recover_session_runs(conn)
+        row = conn.execute(
+            "SELECT COUNT(*), COUNT(CASE WHEN status = 'running' THEN 1 END) FROM sessions"
+        ).fetchone()
+        return int(row[0]), int(row[1])
+
+
 def list_sessions_by_project(project: str, limit: int = 50, db_path: Path | None = None) -> list[dict]:
     with _conn(db_path) as conn:
+        _recover_session_runs(conn)
         rows = conn.execute(
             "SELECT * FROM sessions WHERE project = ? ORDER BY updated_at DESC LIMIT ?",
             (project, limit),
@@ -205,6 +308,7 @@ def delete_session(session_id: str, db_path: Path | None = None) -> None:
     so the order is correct if the pragma is ever enabled.
     """
     with _conn(db_path) as conn:
+        conn.execute("DELETE FROM session_runs WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM memory_items WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM task_graph WHERE session_id = ?", (session_id,))

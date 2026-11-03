@@ -116,7 +116,9 @@ def _db():
 
 
 def _derive_status(session: dict) -> str:
-    """Infer session status from metadata (no dedicated DB column yet)."""
+    """Return persisted lifecycle status, including legacy metadata values."""
+    if session.get("status"):
+        return str(session["status"])
     meta = session.get("metadata") or {}
     if isinstance(meta, str):
         try:
@@ -125,8 +127,7 @@ def _derive_status(session: dict) -> str:
             meta = {}
     if "status" in meta:
         return str(meta["status"])
-    age = time.time() - float(session.get("updated_at") or 0)
-    return "running" if age < 120 else "completed"
+    return "completed"
 
 
 def _classify_event(event: dict) -> str:
@@ -213,12 +214,7 @@ def v1_status() -> dict:
     except Exception:
         pass
 
-    with _db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        active = conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE updated_at > ?",
-            (time.time() - 120,),
-        ).fetchone()[0]
+    total, active = session_store.session_counts()
 
     return {
         "version": _VERSION,

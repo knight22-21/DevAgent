@@ -17,12 +17,18 @@ Flows:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
+
+from devagent.agent.loop import AgentEvent
+
+_message_failed: ContextVar[bool] = ContextVar("message_failed", default=False)
 
 # ---------------------------------------------------------------------------
 # REPL command list — used for tab completion (Phase 29)
@@ -219,6 +225,7 @@ class DevAgentSession:
             )
         self._mgr = mgr
         self.session_id = session_id
+        self._interactive_running = False
 
         # ── Permission manager (Phase 10 / Phase 15) ─────────────────
         rules = []
@@ -494,6 +501,46 @@ class DevAgentSession:
             self._console.print("[dim]No previous messages in this session.[/dim]")
 
     def run_message(self, message: str, quiet: bool = False) -> str:
+        """Run a message and persist its lifecycle for non-interactive callers."""
+        failure_token = _message_failed.set(False)
+        session_id = self.session_id
+        try:
+            run_id = self._mgr.begin_run(session_id)
+            status = "failed"
+            try:
+                result = self._run_message(message, quiet=quiet)
+                status = "failed" if _message_failed.get() else "completed"
+            finally:
+                self._mgr.finish_run(session_id, run_id, status)
+        finally:
+            _message_failed.reset(failure_token)
+        return result
+
+    def _message_events(self, message: str) -> Iterator[AgentEvent]:
+        from devagent.agent.loop import ErrorEvent
+
+        for event in self._loop.run(message):
+            if isinstance(event, ErrorEvent):
+                _message_failed.set(True)
+            yield event
+
+    def run_events(self, message: str) -> Iterator[AgentEvent]:
+        """Run a task as events while tracking the session lifecycle."""
+        from devagent.agent.loop import ErrorEvent
+
+        session_id = self.session_id
+        run_id = self._mgr.begin_run(session_id)
+        status = "failed"
+        saw_error = False
+        try:
+            for event in self._loop.run(message):
+                saw_error = saw_error or isinstance(event, ErrorEvent)
+                yield event
+            status = "failed" if saw_error else "completed"
+        finally:
+            self._mgr.finish_run(session_id, run_id, status)
+
+    def _run_message(self, message: str, quiet: bool = False) -> str:
         """Drive one user turn; render events. Returns the final LLM text.
 
         quiet=True suppresses all terminal output (used by background watcher).
@@ -524,7 +571,7 @@ class DevAgentSession:
 
         if quiet:
             final = ""
-            for event in self._loop.run(message):
+            for event in self._message_events(message):
                 if isinstance(event, FinalAnswerEvent):
                     final = event.text
             return final
@@ -538,9 +585,21 @@ class DevAgentSession:
                     self._last_diff = event.diff
                 yield event
 
-        return render_events(_tee(self._loop.run(message)), permission_mgr=self._permission_mgr)
+        return render_events(_tee(self._message_events(message)), permission_mgr=self._permission_mgr)
 
     def interactive_repl(self, *, first_message: str | None = None) -> None:
+        """Track the entire interactive session, including time between messages."""
+        self._interactive_running = True
+        self._interactive_run = self._mgr.begin_run(self.session_id)
+        status = "failed"
+        try:
+            self._interactive_repl(first_message=first_message)
+            status = "completed"
+        finally:
+            self._mgr.finish_run(self.session_id, self._interactive_run, status)
+            self._interactive_running = False
+
+    def _interactive_repl(self, *, first_message: str | None = None) -> None:
         """Run the interactive REPL, optionally seeding with first_message."""
         if first_message:
             self.run_message(first_message)
@@ -1079,7 +1138,9 @@ class DevAgentSession:
                     model=self._cfg.llm.model,
                     provider=self._cfg.llm.provider,
                 )
+                self._mgr.finish_run(self.session_id, self._interactive_run, "completed")
                 self.session_id = new_sid
+                self._interactive_run = self._mgr.begin_run(new_sid)
                 self._loop.session_id = new_sid
                 self._undo_stack.clear()
                 self._last_diff = ""
