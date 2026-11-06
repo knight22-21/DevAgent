@@ -23,7 +23,8 @@ class BenchReport:
         table = Table(title="Benchmark Results", show_lines=True)
         table.add_column("ID", style="cyan", no_wrap=True)
         table.add_column("Pass", justify="center")
-        table.add_column("Iter", justify="right")
+        table.add_column("LLM Calls", justify="right")
+        table.add_column("Tool Calls", justify="right")
         table.add_column("Cost $", justify="right")
         table.add_column("Time (s)", justify="right")
         table.add_column("Missing Files", style="yellow", max_width=28)
@@ -36,7 +37,8 @@ class BenchReport:
             table.add_row(
                 r.task_id,
                 status,
-                str(r.iterations_used) if r.iterations_used else "-",
+                str(r.llm_calls or r.iterations_used) if (r.llm_calls or r.iterations_used) else "-",
+                str(r.tool_calls) if r.tool_calls else "-",
                 f"{r.cost_usd:.4f}" if r.cost_usd else "-",
                 f"{r.duration_sec:.1f}",
                 missed[:28],
@@ -73,7 +75,8 @@ class BenchReport:
             f"[{color}]{passed}/{total} passed ({rate:.0f}%)[/{color}] | "
             f"avg cost ${avg_cost:.4f} | "
             f"avg time {avg_time:.1f}s | "
-            f"avg iterations {avg_iter:.1f}"
+            f"avg LLM calls {avg_iter:.1f} | "
+            f"avg tool calls {sum(r.tool_calls for r in results) / total:.1f}"
             f"{miss_note}"
         )
 
@@ -107,12 +110,69 @@ class BenchReport:
         console.print(table)
 
     @staticmethod
+    def render_breakdowns(results: list[TaskResult], tasks_by_id: dict) -> None:
+        """Print category and difficulty pass-rate tables."""
+        from collections import defaultdict
+
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        for field, title in (("category", "Results by Category"), ("difficulty", "Results by Difficulty")):
+            groups = defaultdict(list)
+            for result in results:
+                groups[tasks_by_id.get(result.task_id, {}).get(field, "unknown")].append(result)
+            table = Table(title=title)
+            table.add_column(field.title(), style="cyan")
+            table.add_column("Passed", justify="right")
+            table.add_column("Total", justify="right")
+            table.add_column("Pass Rate", justify="right")
+            for name, grouped in sorted(groups.items()):
+                passed = sum(1 for result in grouped if result.passed)
+                rate = passed / len(grouped) * 100
+                color = "green" if rate >= 80 else "yellow" if rate >= 50 else "red"
+                table.add_row(name, str(passed), str(len(grouped)), f"[{color}]{rate:.0f}%[/{color}]")
+            console.print(table)
+
+    @staticmethod
+    def save_sweep_json(sweep_results, param_keys: list[str], model: str | None = None, provider: str | None = None) -> Path:
+        """Persist a self-describing sweep, including every task result."""
+        import datetime
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+        path = _RESULTS_DIR / f"sweep_{ts}.json"
+        data = {
+            "meta": {
+                "benchmark": "B4",
+                "objective": "Find the configuration with the best cost-to-correctness tradeoff.",
+                "params": param_keys,
+                "model": model or "varied",
+                "provider": provider or "varied",
+                "timestamp": ts,
+            },
+            "runs": [
+                {
+                    "params": sr.params,
+                    "pass_rate": round(sr.pass_rate, 4),
+                    "avg_cost_usd": round(sr.avg_cost_usd, 6),
+                    "avg_duration_sec": round(sr.avg_duration_sec, 2),
+                    "results": [BenchReport._result_to_dict(result) for result in sr.results],
+                }
+                for sr in sweep_results
+            ],
+        }
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return path
+
+    @staticmethod
     def _result_to_dict(r: TaskResult) -> dict:
         return {
             "task_id": r.task_id,
             "passed": r.passed,
             "duration_sec": round(r.duration_sec, 2),
             "iterations_used": r.iterations_used,
+            "llm_calls": r.llm_calls,
+            "tool_calls": r.tool_calls,
             "cost_usd": round(r.cost_usd, 6),
             "oracle_output": r.oracle_output,
             "error": r.error,
@@ -137,6 +197,9 @@ class BenchReport:
         label: str = "bench",
         model: str | None = None,
         provider: str | None = None,
+        benchmark: str | None = None,
+        objective: str | None = None,
+        mode: str | None = None,
     ) -> Path:
         """Save results to benchmarks/results/<label>_<timestamp>.json.
 
@@ -149,11 +212,15 @@ class BenchReport:
         ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
         path = _RESULTS_DIR / f"{label}_{ts}.json"
         data: dict | list
-        if model or provider:
+        if model or provider or benchmark or objective or mode:
             data = {
                 "meta": {
+                    "benchmark": benchmark or "B3",
+                    "objective": objective or "Measure end-to-end coding-task correctness and cost.",
+                    "mode": mode or "unknown",
                     "model": model or "unknown",
                     "provider": provider or "unknown",
+                    "task_count": len(results),
                     "timestamp": ts,
                 },
                 "results": [BenchReport._result_to_dict(r) for r in results],

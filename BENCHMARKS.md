@@ -203,7 +203,9 @@ devagent bench native --live -t js-bug-fix-001   # single task by ID
 devagent bench native --live -t go-feature-001
 ```
 
-Results are always saved to `benchmarks/results/<timestamp>.json`. A rolling `native_partial.json` is written after each task so a crash mid-run doesn't lose completed results.
+Results are always saved to `benchmarks/results/<timestamp>.json` with the run objective,
+configuration, task count, and per-task details. A rolling `native_partial.json` is written
+after each task so a crash mid-run doesn't lose completed results.
 
 ---
 

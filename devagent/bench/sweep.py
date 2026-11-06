@@ -81,13 +81,16 @@ class SweepRunner:
             params = dict(zip(keys, combo))
             console.print(f"\n[bold cyan]Sweep:[/bold cyan] {params}")
 
-            runner = BenchRunner(
-                tasks=tasks,
-                dry_run=self.dry_run,
-                provider=self.provider,
-                model=params.get("model"),
-                max_iterations=params.get("max_iterations"),
-            )
+            runner_kwargs = {
+                "tasks": tasks,
+                "dry_run": self.dry_run,
+                "provider": self.provider,
+                "model": params.get("model"),
+                "max_iterations": params.get("max_iterations"),
+            }
+            if "effort" in params:
+                runner_kwargs["effort"] = params["effort"]
+            runner = BenchRunner(**runner_kwargs)
             results = runner.run_all()
             sweep_results.append(SweepResult(params=params, results=results))
 
