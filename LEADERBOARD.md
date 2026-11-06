@@ -1,13 +1,13 @@
 # DevAgent Leaderboard
 
-_Last updated: 2026-11-01_
+_Last updated: 2026-11-06_
 
 Scores are from `devagent bench native --live` runs against the full task set.
 Pass = oracle exits 0 after the agent loop. Higher is better.
 
 | Rank | Model | Provider | Best Score | Latest Score | Latest Run | Runs | Avg Time |
 |------|-------|----------|------------|--------------|------------|------|----------|
-| 1 | `unknown` | unknown | **4/24 (17%)** | 4/24 (17%) | 2026-11-01 | 77 | 0.4s |
+| 1 | `unknown` | unknown | **4/24 (17%)** | 4/24 (17%) | 2026-11-06 | 78 | 0.4s |
 
 ---
 
