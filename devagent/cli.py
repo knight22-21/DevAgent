@@ -2680,6 +2680,7 @@ def bench_native(
     provider: str | None = typer.Option(None, "--provider", "-p", help="Override LLM provider (ollama, anthropic, openai)"),
     model: str | None = typer.Option(None, "--model", "-m", help="Override LLM model for live runs"),
     limit: int | None = typer.Option(None, "--limit", "-n", help="Max number of tasks to run"),
+    output: str = typer.Option("table", "--output", help="table or json"),
 ) -> None:
     """Run the native task set benchmark (B3).
 
@@ -2688,6 +2689,9 @@ def bench_native(
     """
     from devagent.bench.report import BenchReport
     from devagent.bench.runner import BenchRunner
+
+    if output not in {"table", "json"}:
+        raise typer.BadParameter("must be table or json")
 
     tasks = BenchRunner.load_tasks(category=category, difficulty=difficulty)
     if task_id:
@@ -2701,9 +2705,10 @@ def bench_native(
         raise typer.Exit(0)
 
     mode = "[yellow]live[/yellow]" if live else "[dim]dry[/dim]"
-    console.print(
-        f"\n[bold]devagent bench native[/bold] — {len(tasks)} tasks, mode={mode}"
-    )
+    if output != "json":
+        console.print(
+            f"\n[bold]devagent bench native[/bold] — {len(tasks)} tasks, mode={mode}"
+        )
 
     # Always write a rolling partial-results file so a crash doesn't lose completed tasks.
     partial_path = BenchReport.partial_json_path(label="native")
@@ -2715,13 +2720,27 @@ def bench_native(
     runner = BenchRunner(tasks=tasks, dry_run=not live, provider=provider, model=model)
     results = runner.run_all(on_result=_save_partial)
 
-    BenchReport.render_table(results)
-    BenchReport.render_summary(results)
+    if output == "table":
+        BenchReport.render_table(results)
+        BenchReport.render_summary(results)
+        task_map = {task.id: {"category": task.category, "difficulty": task.difficulty} for task in tasks}
+        BenchReport.render_breakdowns(results, task_map)
 
     # Always persist — results are saved after every task (partial) and again
     # as a timestamped final file so nothing is lost on crash or mid-run stop.
-    path = BenchReport.save_json(results, label="native", model=model, provider=provider)
-    console.print(f"\n[dim]Results saved -> {path}[/dim]")
+    path = BenchReport.save_json(
+        results,
+        label="native",
+        model=model,
+        provider=provider,
+        benchmark="B3",
+        objective="Measure whether DevAgent can solve the native coding task set.",
+        mode="live" if live else "dry",
+    )
+    if output == "json":
+        console.print(path.read_text(encoding="utf-8"))
+    else:
+        console.print(f"\n[dim]Results saved -> {path}[/dim]")
 
     # Partial file is now redundant — clean it up.
     if partial_path.exists():
@@ -2800,6 +2819,24 @@ def bench_canary(
         f" | threshold={threshold * 100:.0f}%"
     )
 
+    oracle_results = []
+    oracle_tasks = canary.get("oracle_tasks", [])
+    if oracle_tasks:
+        from devagent.bench.runner import BenchRunner, Task
+        console.print("\n[bold]Oracle dry-run tasks[/bold]")
+        oracle_results = BenchRunner(
+            tasks=[Task.from_dict(task) for task in oracle_tasks],
+            dry_run=True,
+        ).run_all()
+        for result in oracle_results:
+            total_checks += 1
+            if result.passed:
+                passed_checks += 1
+                console.print(f"  [green]PASS[/green] {result.task_id}")
+            else:
+                failures.append(result.task_id)
+                console.print(f"  [red]FAIL[/red] {result.task_id}: {result.oracle_output}")
+
     if save_json:
         import datetime
 
@@ -2821,6 +2858,19 @@ def bench_canary(
             }
             for chk in canary["framework_checks"]
         ]
+        for result in oracle_results:
+            rows.append({
+                "task_id": result.task_id,
+                "passed": result.passed,
+                "duration_sec": result.duration_sec,
+                "iterations_used": result.iterations_used,
+                "llm_calls": result.llm_calls,
+                "tool_calls": result.tool_calls,
+                "cost_usd": result.cost_usd,
+                "oracle_output": result.oracle_output,
+                "files_touched": result.files_touched,
+                "files_missed": result.files_missed,
+            })
         if not skip_legacy:
             for script_rel in canary.get("legacy_scripts", []):
                 script_path = Path(__file__).parent.parent / script_rel
@@ -2837,7 +2887,18 @@ def bench_canary(
                             "oracle_output": "",
                         }
                     )
-        path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        payload = {
+            "meta": {
+                "benchmark": "B5",
+                "objective": "Detect regressions in framework, legacy benchmarks, and patched oracle evaluation.",
+                "mode": "mock",
+                "threshold": threshold,
+                "task_count": len(rows),
+                "timestamp": ts,
+            },
+            "results": rows,
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         console.print(f"[dim]Canary results saved -> {path}[/dim]")
 
     if rate < threshold:
@@ -2862,7 +2923,6 @@ def bench_sweep(
     Runs the native task set with different model/iteration/effort combinations
     and renders a comparison table.  Pass --live to invoke the real agent.
     """
-    import json
 
     from devagent.bench.sweep import SweepRunner
 
@@ -2894,25 +2954,9 @@ def bench_sweep(
     sweep_results = runner.run()
     SweepRunner.render_table(sweep_results, param_keys)
 
-    if output_json:
-        import datetime
-
-        from devagent.bench.report import _RESULTS_DIR
-
-        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
-        path = _RESULTS_DIR / f"sweep_{ts}.json"
-        data = [
-            {
-                "params": sr.params,
-                "pass_rate": round(sr.pass_rate, 4),
-                "avg_cost_usd": round(sr.avg_cost_usd, 6),
-                "avg_duration_sec": round(sr.avg_duration_sec, 2),
-            }
-            for sr in sweep_results
-        ]
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        console.print(f"\n[dim]Sweep results saved -> {path}[/dim]")
+    from devagent.bench.report import BenchReport
+    path = BenchReport.save_sweep_json(sweep_results, param_keys, provider=provider)
+    console.print(f"\n[dim]Sweep results saved -> {path}[/dim]")
 
 
 @bench_app.command("history")

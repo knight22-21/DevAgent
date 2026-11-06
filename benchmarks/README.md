@@ -88,10 +88,9 @@ The leaderboard is auto-updated after every push to main. See
 
 ### Dry-run (CI / no LLM)
 
-The dry-run copies each fixture to a temp dir and runs the oracle on the
-**unmodified** fixture. Oracles that require agent changes will fail — this is
-expected and intentional. The dry-run validates the framework (task loading,
-fixture copying, oracle execution) without calling any LLM.
+The native dry-run copies each fixture to a temp dir and runs the oracle on the
+**unmodified** fixture. The CI canary additionally uses a dedicated patched oracle
+task to prove that patch application plus oracle evaluation works without an LLM.
 
 ```bash
 devagent bench native          # all 24 tasks
@@ -112,7 +111,8 @@ devagent bench native --live --difficulty easy   --model gpt-oss:20b --provider 
 devagent bench native --live -t bug-fix-001 -t test-write-001 --model gpt-oss:20b --provider ollama
 ```
 
-Results are saved to `benchmarks/results/native_YYYYMMDD_HHMMSS.json` automatically.
+Results are saved to `benchmarks/results/native_YYYYMMDD_HHMMSS.json` automatically
+with benchmark, objective, mode, model/provider, task count, and both LLM/tool-call metrics.
 
 ### Leaderboard
 

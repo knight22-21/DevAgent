@@ -55,6 +55,7 @@ class Task:
     max_iterations: int = 30
     timeout_sec: int = 300
     tags: list[str] = field(default_factory=list)
+    dry_run_patches: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> Task:
@@ -70,6 +71,7 @@ class Task:
             max_iterations=data.get("max_iterations", 30),
             timeout_sec=data.get("timeout_sec", 300),
             tags=data.get("tags", []),
+            dry_run_patches=data.get("dry_run_patches", {}),
         )
 
 
@@ -79,6 +81,8 @@ class TaskResult:
     passed: bool
     duration_sec: float
     iterations_used: int = 0
+    llm_calls: int = 0
+    tool_calls: int = 0
     cost_usd: float = 0.0
     oracle_output: str = ""
     error: str = ""
@@ -120,12 +124,14 @@ class BenchRunner:
         model: str | None = None,
         provider: str | None = None,
         max_iterations: int | None = None,
+        effort: str | None = None,
     ) -> None:
         self.tasks = tasks or self.load_tasks()
         self.dry_run = dry_run
         self.model = model
         self.provider = provider
         self.max_iterations = max_iterations
+        self.effort = effort
         self._oracle = OracleEvaluator()
 
     # ------------------------------------------------------------------
@@ -212,7 +218,11 @@ class BenchRunner:
             shutil.rmtree(tmp, ignore_errors=True)  # ignore_errors avoids Windows file-lock crash
 
     def _run_dry(self, task: Task, work_dir: Path) -> TaskResult:
-        """Dry run — just evaluate the oracle on the unmodified fixture."""
+        """Dry run — apply the task's known patch, then evaluate its oracle."""
+        for relative_path, content in task.dry_run_patches.items():
+            target = work_dir / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
         passed, output = self._oracle.evaluate_verbose(
             task.oracle_check,
             cwd=str(work_dir),
@@ -236,6 +246,8 @@ class BenchRunner:
             cfg.llm.provider = self.provider
         if self.model:
             cfg.llm.model = self.model
+        if self.effort:
+            cfg.llm.effort = self.effort
         # Task limit takes effect via cfg; runner-level override takes precedence.
         cfg.agent.max_iterations = self.max_iterations or task.max_iterations
 
@@ -262,6 +274,19 @@ class BenchRunner:
             # overwhelmed by 20+ tools and fall back to writing text plans.
             restricted = session._loop.registry.get_restricted_definitions(_BENCH_TOOLS)
             session._loop.registry.get_definitions = lambda _r=restricted: _r  # type: ignore[method-assign]
+
+            tool_calls = 0
+            for tool_name in _BENCH_TOOLS:
+                original_handler = session._loop.registry._handlers.get(tool_name)
+                if original_handler is None:
+                    continue
+
+                def _counted_handler(args, _handler=original_handler):
+                    nonlocal tool_calls
+                    tool_calls += 1
+                    return _handler(args)
+
+                session._loop.registry._handlers[tool_name] = _counted_handler
 
             # Wrap write_file to auto-syntax-check .py files and surface errors
             # to the model so it can self-correct before proceeding.
@@ -349,6 +374,8 @@ class BenchRunner:
             passed=passed,
             duration_sec=0.0,
             iterations_used=iterations,
+            llm_calls=iterations,
+            tool_calls=tool_calls,
             cost_usd=cost,
             oracle_output=output[:500],
             files_touched=touched,

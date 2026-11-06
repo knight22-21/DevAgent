@@ -61,5 +61,23 @@
       "check_type": "python",
       "check": "from devagent.bench.report import BenchReport; BenchReport.render_summary([])"
     }
+  ],
+  "oracle_tasks": [
+    {
+      "id": "canary-oracle-patched-task",
+      "category": "canary",
+      "difficulty": "easy",
+      "description": "Verify the dry-run patch is applied before oracle evaluation.",
+      "fixture_project": "canary_project",
+      "oracle_check": "python test_app.py",
+      "oracle_pass_exit_code": 0,
+      "expected_files_touched": ["app.py"],
+      "max_iterations": 1,
+      "timeout_sec": 30,
+      "tags": ["canary", "oracle"],
+      "dry_run_patches": {
+        "app.py": "def status():\n    return \"ready\"\n"
+      }
+    }
   ]
 }
