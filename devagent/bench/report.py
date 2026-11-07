@@ -27,6 +27,7 @@ class BenchReport:
         table.add_column("Tool Calls", justify="right")
         table.add_column("Cost $", justify="right")
         table.add_column("Time (s)", justify="right")
+        table.add_column("Failure Class", style="yellow", max_width=22)
         table.add_column("Missing Files", style="yellow", max_width=28)
         table.add_column("Error / Output", style="dim", max_width=36)
 
@@ -41,6 +42,7 @@ class BenchReport:
                 str(r.tool_calls) if r.tool_calls else "-",
                 f"{r.cost_usd:.4f}" if r.cost_usd else "-",
                 f"{r.duration_sec:.1f}",
+                r.failure_class if not r.passed else "-",
                 missed[:28],
                 detail[:60],
             )
@@ -79,6 +81,14 @@ class BenchReport:
             f"avg tool calls {sum(r.tool_calls for r in results) / total:.1f}"
             f"{miss_note}"
         )
+        failures = {}
+        for result in results:
+            if not result.passed:
+                failures[result.failure_class] = failures.get(result.failure_class, 0) + 1
+        if failures:
+            console.print("[dim]Failure classes:[/dim] " + ", ".join(
+                f"{name}={count}" for name, count in sorted(failures.items())
+            ))
 
     @staticmethod
     def render_by_category(results: list[TaskResult], tasks_by_id: dict) -> None:
@@ -178,6 +188,8 @@ class BenchReport:
             "error": r.error,
             "files_touched": r.files_touched,
             "files_missed": r.files_missed,
+            "failure_class": r.failure_class,
+            "diagnostics": r.diagnostics,
         }
 
     @staticmethod
@@ -239,6 +251,14 @@ class BenchReport:
             return None, []
         if isinstance(raw, dict) and "results" in raw:
             return raw.get("meta"), raw["results"]
+        if isinstance(raw, dict) and "runs" in raw:
+            # Sweep files contain one result list per parameter combination.
+            rows = [
+                result
+                for run in raw["runs"]
+                for result in run.get("results", [])
+            ]
+            return raw.get("meta"), rows
         if isinstance(raw, list) and raw:
             return None, raw
         return None, []

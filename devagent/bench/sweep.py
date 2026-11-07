@@ -38,8 +38,9 @@ class SweepResult:
 
 
 _DEFAULT_GRID: dict[str, list] = {
-    "model": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"],
-    "max_iterations": [10, 30],
+    "model": ["qwen2.5-coder:7b", "claude-haiku-4-5"],
+    "max_iterations": [10, 30, 50],
+    "effort": ["low", "high", "max"],
 }
 
 

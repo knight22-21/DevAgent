@@ -78,6 +78,70 @@
       "dry_run_patches": {
         "app.py": "def status():\n    return \"ready\"\n"
       }
+    },
+    {
+      "id": "canary-js-bug-fix",
+      "category": "canary",
+      "difficulty": "easy",
+      "description": "Verify the JavaScript patched oracle path.",
+      "fixture_project": "js_project",
+      "oracle_check": "node --test tests/math.test.js",
+      "oracle_pass_exit_code": 0,
+      "expected_files_touched": ["src/math.js"],
+      "max_iterations": 1,
+      "timeout_sec": 30,
+      "tags": ["canary", "oracle", "javascript"],
+      "dry_run_patches": {
+        "src/math.js": "// math.js — arithmetic utilities\n\nexport function add(a, b) {\n    return a + b;\n}\n\nexport function subtract(a, b) {\n    return a - b;\n}\n\nexport function multiply(a, b) {\n    return a * b;\n}\n\nexport function divide(a, b) {\n    if (b === 0) throw new Error(\"Division by zero\");\n    return a / b;\n}\n"
+      }
+    },
+    {
+      "id": "canary-js-feature",
+      "category": "canary",
+      "difficulty": "easy",
+      "description": "Verify the JavaScript feature patched oracle path.",
+      "fixture_project": "js_project",
+      "oracle_check": "node --test tests/strings.test.js",
+      "oracle_pass_exit_code": 0,
+      "expected_files_touched": ["src/strings.js"],
+      "max_iterations": 1,
+      "timeout_sec": 30,
+      "tags": ["canary", "oracle", "javascript"],
+      "dry_run_patches": {
+        "src/strings.js": "// strings.js — string utilities\n\nexport function reverse(s) {\n    return s.split('').reverse().join('');\n}\n\nexport function countWords(s) {\n    return s.trim().split(/\\s+/).filter(Boolean).length;\n}\n\nexport function capitalize(s) {\n    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();\n}\n\nexport function camelCase(s) {\n    const words = s.trim().split(/\\s+/).filter(Boolean);\n    return words.map((word, index) => index === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join('');\n}\n"
+      }
+    },
+    {
+      "id": "canary-go-bug-fix",
+      "category": "canary",
+      "difficulty": "easy",
+      "description": "Verify the Go patched oracle path.",
+      "fixture_project": "go_project",
+      "oracle_check": "go test ./mathutils/...",
+      "oracle_pass_exit_code": 0,
+      "expected_files_touched": ["mathutils/math.go"],
+      "max_iterations": 1,
+      "timeout_sec": 30,
+      "tags": ["canary", "oracle", "go"],
+      "dry_run_patches": {
+        "mathutils/math.go": "package mathutils\n\nfunc Add(a, b int) int { return a + b }\nfunc Subtract(a, b int) int { return a - b }\nfunc Multiply(a, b int) int { return a * b }\nfunc Divide(a, b float64) float64 {\n    if b == 0 { panic(\"division by zero\") }\n    return a / b\n}\n"
+      }
+    },
+    {
+      "id": "canary-go-feature",
+      "category": "canary",
+      "difficulty": "easy",
+      "description": "Verify the Go feature patched oracle path.",
+      "fixture_project": "go_project",
+      "oracle_check": "go test ./stringutils/...",
+      "oracle_pass_exit_code": 0,
+      "expected_files_touched": ["stringutils/strings.go"],
+      "max_iterations": 1,
+      "timeout_sec": 30,
+      "tags": ["canary", "oracle", "go"],
+      "dry_run_patches": {
+        "stringutils/strings.go": "package stringutils\n\nimport \"strings\"\n\nfunc Reverse(s string) string {\n    runes := []rune(s)\n    for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 { runes[i], runes[j] = runes[j], runes[i] }\n    return string(runes)\n}\nfunc CountWords(s string) int { return len(strings.Fields(s)) }\nfunc TitleCase(s string) string {\n    words := strings.Fields(s)\n    for i, word := range words { if len(word) > 0 { words[i] = strings.ToUpper(word[:1]) + strings.ToLower(word[1:]) } }\n    return strings.Join(words, \" \")\n}\n"
+      }
     }
   ]
 }
