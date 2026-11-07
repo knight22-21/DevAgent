@@ -2810,15 +2810,6 @@ def bench_canary(
                 console.print(f"  [red]FAIL[/red] {script_rel}\n    {short}")
                 failures.append(script_rel)
 
-    # Summary
-    rate = passed_checks / total_checks if total_checks else 0.0
-    color = "green" if rate >= threshold else "red"
-    console.print(
-        f"\n[bold]Canary result:[/bold] "
-        f"[{color}]{passed_checks}/{total_checks} passed ({rate * 100:.0f}%)[/{color}]"
-        f" | threshold={threshold * 100:.0f}%"
-    )
-
     oracle_results = []
     oracle_tasks = canary.get("oracle_tasks", [])
     if oracle_tasks:
@@ -2836,6 +2827,14 @@ def bench_canary(
             else:
                 failures.append(result.task_id)
                 console.print(f"  [red]FAIL[/red] {result.task_id}: {result.oracle_output}")
+
+    rate = passed_checks / total_checks if total_checks else 0.0
+    color = "green" if rate >= threshold else "red"
+    console.print(
+        f"\n[bold]Canary result:[/bold] "
+        f"[{color}]{passed_checks}/{total_checks} passed ({rate * 100:.0f}%)[/{color}]"
+        f" | threshold={threshold * 100:.0f}%"
+    )
 
     if save_json:
         import datetime
@@ -2910,7 +2909,7 @@ def bench_canary(
 
 @bench_app.command("sweep")
 def bench_sweep(
-    params: str = typer.Option("model,max_iterations", "--params", help="Comma-separated param names to sweep"),
+    params: str = typer.Option("model,max_iterations,effort", "--params", help="Comma-separated param names to sweep"),
     limit: int = typer.Option(5, "--tasks", "-n", help="Number of tasks per combination"),
     category: str | None = typer.Option(None, "--category", "-c"),
     difficulty: str | None = typer.Option(None, "--difficulty", "-d"),
@@ -2930,8 +2929,8 @@ def bench_sweep(
 
     # Default grid values for known params
     _defaults: dict[str, list] = {
-        "model": ["gpt-oss:20b", "glm-5.3-flash"],
-        "max_iterations": [10, 30],
+        "model": ["qwen2.5-coder:7b", "claude-haiku-4-5"],
+        "max_iterations": [10, 30, 50],
         "effort": ["low", "high", "max"],
     }
     param_grid = {k: _defaults.get(k, []) for k in param_keys if k in _defaults}

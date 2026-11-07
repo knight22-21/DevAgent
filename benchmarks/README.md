@@ -76,6 +76,8 @@ Results from live runs with `devagent bench native --live`:
 
 | Model | Provider | Score | Run date |
 |---|---|---|---|
+| **nemotron-3-ultra** | Ollama Cloud | **15/24 (62%)** | 2026-11-07 |
+| **gpt-oss:120b** | Ollama Cloud | **2/24 (8%) corrected** | 2026-11-07 |
 | **gpt-oss:20b** | Ollama Cloud | **21/24 (87.5%)** | 2026-09-18 |
 | llama3.2:3b | Ollama (local) | 9/20 (45%) | 2026-09-07 |
 
@@ -101,7 +103,7 @@ devagent bench canary          # 5 canary tasks + framework checks (used in CI)
 
 ```bash
 # Full run
-devagent bench native --live --model gpt-oss:20b --provider ollama
+devagent bench native --live --model gpt-oss:120b --provider ollama
 
 # Filter by category or difficulty
 devagent bench native --live --category bug_fix --model gpt-oss:20b --provider ollama

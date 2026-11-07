@@ -29,15 +29,16 @@ _BENCH_TOOLS = ["read_file", "write_file", "list_files", "grep", "run_shell"]
 # this terse version keeps them in tool-call mode.
 _BENCH_SYSTEM_PROMPT = (
     "You are a coding assistant. Complete every task by calling tools — never answer in plain text. "
-    "To fix a bug: call read_file to read the full file, then write_file with the COMPLETE corrected "
-    "file (all functions, not just the changed one), then run_shell to verify with pytest. "
-    "To add a feature or write a file: call list_files or read_file to explore first, "
-    "then write_file to write the complete file. "
-    "To explain, review, or audit code: read the relevant files first, then call write_file to save "
-    "your answer to DEVAGENT_OUTPUT.txt. Be technical and specific — name exact functions, "
-    "vulnerability types (e.g. eval() injection, security risk), and code patterns. "
-    "IMPORTANT: Always write output to files explicitly using write_file. "
-    "Never rely on your final text reply as the output — always call write_file."
+    "Read the full target file and the relevant tests before editing. Preserve every existing public function, "
+    "import, export, and behavior unless the task explicitly asks for a change. "
+    "For bug fixes and features, write the COMPLETE corrected file, then run the exact oracle command. "
+    "For a new feature, implement the named API and add the requested named test; a test command that says "
+    "\\\"deselected\\\" or has collection/import errors is a failure, so keep iterating until it runs the intended tests. "
+    "For JavaScript or Go tasks, write the complete target source file and run the exact node/go oracle. "
+    "For explain, review, audit, or onboarding tasks, read all requested files, then call write_file to save "
+    "the answer to the exact required path (usually DEVAGENT_OUTPUT.txt or DEVAGENT.md). After writing, call "
+    "read_file on that path to verify it exists and contains the requested details; never rely on final text. "
+    "Be technical and specific — name exact functions, vulnerability types, severities, and code patterns."
 )
 _FIXTURES_DIR = Path(__file__).parent.parent.parent / "benchmarks" / "fixtures"
 
@@ -88,6 +89,8 @@ class TaskResult:
     error: str = ""
     files_touched: list[str] = field(default_factory=list)
     files_missed: list[str] = field(default_factory=list)
+    failure_class: str = "passed"
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 def _snapshot_mtimes(root: Path) -> dict[str, float]:
@@ -105,6 +108,44 @@ def _changed_files(before: dict[str, float], after: dict[str, float]) -> list[st
         path for path, mtime in after.items()
         if path not in before or before[path] != mtime
     )
+
+
+def _classify_failure(
+    *,
+    passed: bool,
+    error: str,
+    oracle_output: str,
+    files_missed: list[str],
+    tool_trace: list[dict[str, object]],
+) -> str:
+    """Classify the first observable failure boundary for a live task."""
+    if passed:
+        return "passed"
+    if "timed out" in error.lower() or "timeout" in error.lower():
+        return "timeout_budget"
+    if any(event.get("ok") is False for event in tool_trace):
+        return "tool_call_schema"
+    if files_missed:
+        return "incomplete_file_writing"
+    output = oracle_output.lower()
+    if any(marker in output for marker in ("pytest", "assert", "traceback", "error", "fail", "deselected")):
+        return "test_repair_failure"
+    return "model_reasoning_failure"
+
+
+def _summarize_tool_args(tool_name: str, args: object) -> dict[str, object]:
+    """Capture safe, compact tool evidence without persisting file contents."""
+    if not isinstance(args, dict):
+        return {"type": type(args).__name__}
+    summary: dict[str, object] = {"keys": sorted(str(k) for k in args)}
+    if "path" in args:
+        summary["path"] = str(args["path"])
+    if "content" in args:
+        content = args["content"]
+        summary["content_chars"] = len(content) if isinstance(content, str) else 0
+    if tool_name == "run_shell" and "command" in args:
+        summary["command"] = str(args["command"])[:240]
+    return summary
 
 
 class BenchRunner:
@@ -234,6 +275,13 @@ class BenchRunner:
             passed=passed,
             duration_sec=0.0,
             oracle_output=output[:500],
+            failure_class=_classify_failure(
+                passed=passed,
+                error="",
+                oracle_output=output,
+                files_missed=[],
+                tool_trace=[],
+            ),
         )
 
     def _run_live(self, task: Task, work_dir: Path) -> TaskResult:
@@ -263,6 +311,7 @@ class BenchRunner:
                 fallback=route,
             )
 
+        tool_trace: list[dict[str, object]] = []
         try:
             session = DevAgentSession(
                 project_root=str(work_dir),
@@ -281,10 +330,26 @@ class BenchRunner:
                 if original_handler is None:
                     continue
 
-                def _counted_handler(args, _handler=original_handler):
+                def _counted_handler(args, _handler=original_handler, _tool_name=tool_name):
                     nonlocal tool_calls
                     tool_calls += 1
-                    return _handler(args)
+                    event: dict[str, object] = {
+                        "tool": _tool_name,
+                        "args": _summarize_tool_args(_tool_name, args),
+                    }
+                    try:
+                        result = _handler(args)
+                        event["ok"] = True
+                        if isinstance(result, str):
+                            event["result_chars"] = len(result)
+                            event["result_tail"] = result[-240:]
+                        return result
+                    except Exception as exc:
+                        event["ok"] = False
+                        event["error"] = str(exc)[:240]
+                        raise
+                    finally:
+                        tool_trace.append(event)
 
                 session._loop.registry._handlers[tool_name] = _counted_handler
 
@@ -334,23 +399,20 @@ class BenchRunner:
                     passed=False,
                     duration_sec=0.0,
                     error=f"agent timed out after {wall_timeout}s",
+                    failure_class="timeout_budget",
+                    diagnostics={"tool_trace": tool_trace, "timeout_sec": wall_timeout},
                 )
             if thread_exc:
                 raise thread_exc[0]
 
-            # Auto-write the agent's final text answer to DEVAGENT_OUTPUT.txt so
-            # explain/review oracle checks work even when the model answers in text
-            # rather than calling write_file explicitly.
-            if final_answer and not (work_dir / "DEVAGENT_OUTPUT.txt").exists():
-                (work_dir / "DEVAGENT_OUTPUT.txt").write_text(
-                    final_answer[0], encoding="utf-8"
-                )
         except Exception as exc:
             return TaskResult(
                 task_id=task.id,
                 passed=False,
                 duration_sec=0.0,
                 error=str(exc),
+                failure_class="tool_call_schema" if tool_trace else "model_reasoning_failure",
+                diagnostics={"tool_trace": tool_trace},
             )
 
         cost = session._budget.total_cost_usd
@@ -369,6 +431,13 @@ class BenchRunner:
             pass_exit_code=task.oracle_pass_exit_code,
             timeout=task.timeout_sec,
         )
+        failure_class = _classify_failure(
+            passed=passed,
+            error="",
+            oracle_output=output,
+            files_missed=missed,
+            tool_trace=tool_trace,
+        )
         return TaskResult(
             task_id=task.id,
             passed=passed,
@@ -380,4 +449,15 @@ class BenchRunner:
             oracle_output=output[:500],
             files_touched=touched,
             files_missed=missed,
+            failure_class=failure_class,
+            diagnostics={
+                "tool_trace": tool_trace,
+                "write_targets": [
+                    event["args"].get("path")
+                    for event in tool_trace
+                    if event.get("tool") == "write_file"
+                    and isinstance(event.get("args"), dict)
+                ],
+                "oracle_ran": True,
+            },
         )

@@ -200,7 +200,9 @@ DevAgent ships with a 24-task benchmark covering bug fixes, feature adds, refact
 | Rank | Model | Provider | Best Score | Runs |
 |---|---|---|---|---|
 | 1 | **gpt-oss:20b** | **Ollama Cloud** | **21/24 (87.5%)** | 2 |
-| 2 | llama3.2:3b | Ollama (local) | 9/20 (45%) | 1 |
+| 2 | nemotron-3-ultra | Ollama Cloud | **15/24 (62%)** | 1 |
+| 3 | llama3.2:3b | Ollama (local) | 9/20 (45%) | 1 |
+| 4 | gpt-oss:120b | Ollama Cloud | **2/24 (8%) corrected** | 2 |
 
 See **[BENCHMARKS.md](BENCHMARKS.md)** for per-task results, failure analysis, and instructions for running the benchmark against any supported model. See **[LEADERBOARD.md](LEADERBOARD.md)** for the auto-updated rankings.
 

@@ -107,6 +107,20 @@ Average time per task: **43.9s** — Average iterations: **9.5**
 
 Average time per task: **36.9s** — Average iterations: **9.7**
 
+### gpt-oss:120b — Ollama Cloud — November 2026
+
+**2/24 (8%)** under the corrected benchmark rules. Average: **5.2 LLM calls**, **4.1 tool calls**, and **13.3s/task**.
+Artifact: `benchmarks/results/native_20261106_182542.json`.
+
+The earlier 6/24 (25%) result used a runner fallback that could convert a final chat response into an output file and weaker text oracles. The corrected run requires explicit artifacts and semantic content, so 2/24 is the authoritative score.
+
+### nemotron-3-ultra — Ollama Cloud — November 2026
+
+**15/24 (62%)** under the same corrected rules. Average: **7.3 LLM calls**, **7.1 tool calls**, and **54.9s/task**.
+Artifact: `benchmarks/results/native_20261106_184818.json`.
+
+Nemotron passed the core Python feature, bug-fix, explanation, onboarding, and JavaScript tasks more often than gpt-oss:120b. Remaining failures were concentrated in multi-file Python work, one output review task, test generation, Go tasks, and timeouts.
+
 ---
 
 ### llama3.2:3b — Ollama (local) — September 2026
@@ -169,6 +183,24 @@ devagent bench sweep --live --params model --tasks 5 --provider ollama
 
 **Takeaway:** glm-5.3-flash's 3s average reflects that it completes turns without doing the work — it answers immediately rather than reading files, writing code, and running tests. gpt-oss:20b takes longer because it actually executes each step. For agent tasks, time-per-task is not a measure of efficiency; pass rate is.
 
+**Latest gpt-oss:120b matrix (45 evaluations):** all combinations used the same five tasks (`bug-fix-001`, `feature-add-001`, `security-fix-001`, `bug-fix-002`, `refactor-001`).
+
+| Max iterations | Effort | Pass rate |
+|---:|---|---:|
+| 10 | low | 40% |
+| 10 | high | 60% |
+| 10 | max | 60% |
+| 30 | low | 60% |
+| 30 | high | 40% |
+| 30 | max | 60% |
+| 50 | low | 40% |
+| 50 | high | 60% |
+| 50 | max | 60% |
+
+**Cost note:** Ollama is currently treated as zero-cost by the budget layer, so these stored cost values are not Ollama Cloud billing estimates. Add model pricing metadata before using B4 for spend decisions.
+
+**Finding:** increasing iteration budget did not improve correctness on this sample. The best observed result was 60%, achieved by several settings; `50/max` was not better than `10/max`. `security-fix-001` passed in 9/9 runs, `refactor-001` in 8/9, `bug-fix-002` in 0/9, and `feature-add-001` in 0/9. This indicates prompt/task execution failures, not a simple budget shortage.
+
 ---
 
 ## Running the benchmark
@@ -216,4 +248,8 @@ after each task so a crash mid-run doesn't lose completed results.
 | `benchmarks/results/llama32_3b_baseline.json` | llama3.2:3b (local) | 20 | 9/20 (45%) | Sep 2026 |
 | `benchmarks/results/native_20260907_074033.json` | gpt-oss:20b (cloud) | 20 | 20/20 (100%) | Sep 2026 |
 | `benchmarks/results/native_20260918_123726.json` | gpt-oss:20b (cloud) | 24 | 21/24 (87.5%) | Sep 2026 |
+| `benchmarks/results/native_20261106_151314.json` | gpt-oss:120b (cloud) | 24 | 6/24 (25%) | Nov 2026 |
+| `benchmarks/results/native_20261106_182542.json` | gpt-oss:120b corrected | 24 | 2/24 (8%) | Nov 2026 |
+| `benchmarks/results/native_20261106_184818.json` | nemotron-3-ultra corrected | 24 | 15/24 (62%) | Nov 2026 |
+| `benchmarks/results/sweep_20261106_152813.json` | gpt-oss:120b B4 matrix | 45 evaluations | 40–60%/configuration | Nov 2026 |
 | `benchmarks/results/sweep_20260907_171806.json` | B4 sweep: gpt-oss:20b vs glm-5.3-flash | 5 | 5/5 vs 2/5 | Sep 2026 |
