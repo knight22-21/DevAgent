@@ -1827,7 +1827,7 @@ def do(
         return
 
     # First attempt
-    events = list(session._loop.run(task))
+    events = list(session.run_events(task))
 
     def _render(evs: list) -> None:
         if output_format == "stream-json":
@@ -1856,7 +1856,7 @@ def do(
             )
             try:
                 retry_session = _make_session()
-                retry_events = list(retry_session._loop.run(retry_task))
+                retry_events = list(retry_session.run_events(retry_task))
             except Exception as exc:
                 _handle_error(exc)
                 raise typer.Exit(2)

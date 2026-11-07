@@ -104,6 +104,10 @@ class Worker:
         from devagent.session.memory import MemoryBlock
         from devagent.tools.registry import ToolRegistry, build_registry
 
+        mgr: SessionManager | None = None
+        session_id: str | None = None
+        run_id: str | None = None
+        status = "failed"
         try:
             mgr = SessionManager()
             session_id = mgr.new(
@@ -112,6 +116,7 @@ class Worker:
                 provider=self._cfg.llm.provider,
                 title=f"[worker:{self._task.worker_type}] {self._task.description[:60]}",
             )
+            run_id = mgr.begin_run(session_id)
             self._task.assigned_session = session_id
 
             registry: ToolRegistry = build_registry(
@@ -191,6 +196,7 @@ class Worker:
                         if path and path not in modified_files:
                             modified_files.append(path)
 
+            status = "failed" if had_error else "completed"
             return WorkerResult(
                 task_id=self._task.id,
                 worker_type=self._task.worker_type,
@@ -207,6 +213,9 @@ class Worker:
                 output="",
                 error=str(exc),
             )
+        finally:
+            if mgr is not None and session_id is not None and run_id is not None:
+                mgr.finish_run(session_id, run_id, status)
 
     def run_in_thread(self) -> threading.Thread:
         self._thread = threading.Thread(target=self._run_and_store, daemon=True)

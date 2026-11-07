@@ -76,6 +76,20 @@ class OrchestratorSession:
         return self._session_id
 
     def run(self, task: str) -> Generator[AgentEvent, None, None]:
+        """Persist the outcome while forwarding orchestration events."""
+        run_id = self._mgr.begin_run(self._session_id)
+        status = "failed"
+        saw_error = False
+        try:
+            for event in self._run(task):
+                if isinstance(event, ErrorEvent):
+                    saw_error = True
+                yield event
+            status = "failed" if saw_error else "completed"
+        finally:
+            self._mgr.finish_run(self._session_id, run_id, status)
+
+    def _run(self, task: str) -> Generator[AgentEvent, None, None]:
         """Full orchestration pipeline as an event generator."""
         # 1. Decompose
         yield ThinkingEvent("Decomposing task into subtasks...")
