@@ -1,0 +1,192 @@
+{
+  "meta": {
+    "benchmark": "B5",
+    "objective": "Detect regressions in framework, legacy benchmarks, and patched oracle evaluation.",
+    "mode": "mock",
+    "threshold": 0.8,
+    "task_count": 17,
+    "timestamp": "20261107_190807"
+  },
+  "results": [
+    {
+      "task_id": "canary-tool-registry",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-web-tools",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-config-load",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-vision-tools",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-todo-tools",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-oracle-pass",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-oracle-fail",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-task-load",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-report-table",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "canary-oracle-patched-task",
+      "passed": true,
+      "duration_sec": 0.0167695880000025,
+      "iterations_used": 0,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "cost_usd": 0.0,
+      "oracle_output": "",
+      "files_touched": [],
+      "files_missed": []
+    },
+    {
+      "task_id": "canary-js-bug-fix",
+      "passed": true,
+      "duration_sec": 0.24733744299999927,
+      "iterations_used": 0,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "cost_usd": 0.0,
+      "oracle_output": "TAP version 13\n# Subtest: add(2, 3) === 5\nok 1 - add(2, 3) === 5\n  ---\n  duration_ms: 1.500128\n  type: 'test'\n  ...\n# Subtest: subtract(10, 4) === 6\nok 2 - subtract(10, 4) === 6\n  ---\n  duration_ms: 0.192611\n  type: 'test'\n  ...\n# Subtest: multiply(3, 4) === 12\nok 3 - multiply(3, 4) === 12\n  ---\n  duration_ms: 0.135554\n  type: 'test'\n  ...\n# Subtest: divide(10, 2) === 5\nok 4 - divide(10, 2) === 5\n  ---\n  duration_ms: 0.137858\n  type: 'test'\n  ...\n# Subtest: divide(9, 3) === 3\nok 5 - divide(9, 3)",
+      "files_touched": [],
+      "files_missed": []
+    },
+    {
+      "task_id": "canary-js-feature",
+      "passed": true,
+      "duration_sec": 0.1002125269999965,
+      "iterations_used": 0,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "cost_usd": 0.0,
+      "oracle_output": "TAP version 13\n# Subtest: reverse(\"hello\") === \"olleh\"\nok 1 - reverse(\"hello\") === \"olleh\"\n  ---\n  duration_ms: 0.904463\n  type: 'test'\n  ...\n# Subtest: countWords(\"hello world\") === 2\nok 2 - countWords(\"hello world\") === 2\n  ---\n  duration_ms: 0.207549\n  type: 'test'\n  ...\n# Subtest: capitalize(\"hello\") === \"Hello\"\nok 3 - capitalize(\"hello\") === \"Hello\"\n  ---\n  duration_ms: 0.146915\n  type: 'test'\n  ...\n# Subtest: camelCase(\"hello world\") === \"helloWorld\"\nok 4 - camelCase(\"hello world\") === \"he",
+      "files_touched": [],
+      "files_missed": []
+    },
+    {
+      "task_id": "canary-go-bug-fix",
+      "passed": true,
+      "duration_sec": 6.162804734000005,
+      "iterations_used": 0,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "cost_usd": 0.0,
+      "oracle_output": "ok  \tgo_project/mathutils\t0.002s",
+      "files_touched": [],
+      "files_missed": []
+    },
+    {
+      "task_id": "canary-go-feature",
+      "passed": true,
+      "duration_sec": 0.16487313799999725,
+      "iterations_used": 0,
+      "llm_calls": 0,
+      "tool_calls": 0,
+      "cost_usd": 0.0,
+      "oracle_output": "ok  \tgo_project/stringutils\t0.002s",
+      "files_touched": [],
+      "files_missed": []
+    },
+    {
+      "task_id": "benchmarks/bench_security.py",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "benchmarks/bench_tasks.py",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    },
+    {
+      "task_id": "benchmarks/bench_token_usage.py",
+      "passed": true,
+      "duration_sec": 0.0,
+      "iterations_used": 0,
+      "cost_usd": 0.0,
+      "files_touched": [],
+      "files_missed": [],
+      "oracle_output": ""
+    }
+  ]
+}
