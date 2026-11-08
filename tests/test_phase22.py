@@ -114,6 +114,7 @@ class TestDoJsonSchema:
         mock_loop.run.return_value = iter(events)
         mock_session = MagicMock()
         mock_session._loop = mock_loop
+        mock_session.run_events = mock_loop.run
         mock_session.session_id = "test-session"
         return patch("devagent.agent.flows.DevAgentSession", return_value=mock_session)
 
@@ -150,12 +151,14 @@ class TestDoJsonSchema:
         mock_loop1.run.return_value = iter(first_events)
         mock_session1 = MagicMock()
         mock_session1._loop = mock_loop1
+        mock_session1.run_events = mock_loop1.run
         mock_session1.session_id = "s1"
 
         mock_loop2 = MagicMock()
         mock_loop2.run.return_value = iter(retry_events)
         mock_session2 = MagicMock()
         mock_session2._loop = mock_loop2
+        mock_session2.run_events = mock_loop2.run
         mock_session2.session_id = "s2"
 
         with patch("devagent.agent.flows.DevAgentSession", side_effect=[mock_session1, mock_session2]), \
@@ -175,12 +178,14 @@ class TestDoJsonSchema:
         mock_loop1.run.return_value = iter(bad_events)
         mock_session1 = MagicMock()
         mock_session1._loop = mock_loop1
+        mock_session1.run_events = mock_loop1.run
         mock_session1.session_id = "s1"
 
         mock_loop2 = MagicMock()
         mock_loop2.run.return_value = iter(bad_retry)
         mock_session2 = MagicMock()
         mock_session2._loop = mock_loop2
+        mock_session2.run_events = mock_loop2.run
         mock_session2.session_id = "s2"
 
         with patch("devagent.agent.flows.DevAgentSession", side_effect=[mock_session1, mock_session2]), \
@@ -199,12 +204,14 @@ class TestDoJsonSchema:
         mock_loop1.run.return_value = iter(error_events)
         mock_session1 = MagicMock()
         mock_session1._loop = mock_loop1
+        mock_session1.run_events = mock_loop1.run
         mock_session1.session_id = "s1"
 
         mock_loop2 = MagicMock()
         mock_loop2.run.return_value = iter([_make_error_event("still bad")])
         mock_session2 = MagicMock()
         mock_session2._loop = mock_loop2
+        mock_session2.run_events = mock_loop2.run
         mock_session2.session_id = "s2"
 
         with patch("devagent.agent.flows.DevAgentSession", side_effect=[mock_session1, mock_session2]), \
@@ -232,6 +239,7 @@ class TestDoJsonSchema:
         mock_loop.run.side_effect = _fake_run
         mock_session = MagicMock()
         mock_session._loop = mock_loop
+        mock_session.run_events = mock_loop.run
         mock_session.session_id = "s1"
 
         with patch("devagent.agent.flows.DevAgentSession", return_value=mock_session), \

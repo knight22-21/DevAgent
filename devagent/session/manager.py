@@ -53,7 +53,16 @@ class SessionManager:
         return session
 
     def close(self, session_id: str) -> None:
-        store.update_session(session_id, db_path=self.db_path)
+        self.set_status(session_id, "completed")
+
+    def set_status(self, session_id: str, status: str) -> None:
+        store.set_session_status(session_id, status, db_path=self.db_path)
+
+    def begin_run(self, session_id: str) -> str:
+        return store.begin_session_run(session_id, db_path=self.db_path)
+
+    def finish_run(self, session_id: str, run_id: str, status: str) -> None:
+        store.finish_session_run(session_id, run_id, status, db_path=self.db_path)
 
     def list(self, limit: int = 50) -> list[dict]:
         return store.list_sessions(limit=limit, db_path=self.db_path)
